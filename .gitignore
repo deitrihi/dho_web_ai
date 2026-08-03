@@ -1,0 +1,14 @@
+.env
+deploy.config
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# 원본/구조화 DB (수백MB~1.5GB — git 대신 deploy.sh가 rsync/tar로 서버에 직접 전송)
+dho_cache.sqlite3
+dho_cache.sqlite3.bak_*
+dho_structured.sqlite3
+
+# 로컬 Claude Code 설정 (개인 권한 allowlist 등, 프로젝트 공용 아님)
+.claude/

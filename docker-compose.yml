@@ -1,0 +1,36 @@
+# DHO 로컬 아카이브 NAS 배포 스택.
+# - webapp: dho_webapp.py 조회/편집용 Flask 웹앱 (gunicorn). dho_structured.sqlite3를
+#   읽기-쓰기로 단일 파일 마운트한다 (항목 추가/수정 기능이 DB에 직접 씀).
+# - chat: OpenWebUI를 대체한 Vercel AI SDK 기반 Text-to-SQL 챗봇 프론트(chat/). DB는
+#   읽기 전용으로 dbsql 프로젝트 폴더를 통째로 마운트한다.
+#   API 키/URL은 .env 파일(OPENAI_* 변수, git에는 커밋하지 말 것)에서 읽어온다.
+services:
+  webapp:
+    build: .
+    container_name: dho-webapp
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./dho_structured.sqlite3:/app/dho_structured.sqlite3
+    environment:
+      - DHO_DB_PATH=/app/dho_structured.sqlite3
+
+  chat:
+    build:
+      context: ./chat
+      args:
+        NEXT_BASE_PATH: /chat
+    container_name: dho-chat
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/data/dbsql:ro
+    environment:
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - DHO_DB_PATH=/data/dbsql/dho_structured.sqlite3
+    env_file:
+      - .env

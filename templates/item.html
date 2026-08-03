@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ item['name'] or item['title'] }} - DHO 아카이브 미러{% endblock %}
+{% block breadcrumb %}
+  <span class="sep">›</span>
+  {% if group_title %}<span class="crumb">{{ group_title }}</span><span class="sep">›</span>{% endif %}
+  <a class="crumb" href="{{ url_for('category_list', category=item['category']) }}">{{ category_label }}</a>
+  <span class="sep">›</span>
+  <span class="crumb current">{{ item['name'] or item['title'] }}</span>
+{% endblock %}
+{% block content %}
+  <section class="card">
+    <header class="card-head">
+      <h1>{{ item['name'] or item['title'] }}</h1>
+      <span class="badge-tag">{{ category_label }}</span>
+      <a class="btn-add-row" href="{{ url_for('item_edit', category=item['category'], item_id=item['item_id']) }}">수정</a>
+    </header>
+
+    {% if item['description'] %}
+      <p class="description">{{ item['description'] }}</p>
+    {% endif %}
+
+    {% if rows %}
+      <div class="row-list">
+        {% for r in rows %}
+          <div class="row">
+            <div class="row-label">{{ r.label if r.type == 'attr' else r.heading }}</div>
+            <div class="row-value">
+              {%- if r.type == 'attr' %}
+                {{- r.text | with_links(r.links) -}}
+                {% if r.images %}
+                  <div class="row-images">
+                    {% for img in r.images %}
+                      <figure>
+                        <img src="{{ img.src }}" alt="{{ img.alt }}" loading="lazy">
+                        {% if img.caption %}<figcaption>{{ img.caption }}</figcaption>{% endif %}
+                      </figure>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              {%- else -%}
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>{% for h in r.headers %}<th>{{ h }}</th>{% endfor %}</tr>
+                    </thead>
+                    <tbody>
+                      {% for row in r.rows %}
+                        <tr>
+                          {% for cell in row %}
+                            <td>{{ cell.text | with_links(cell.links) }}</td>
+                          {% endfor %}
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {%- endif -%}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  {% if backlinks.groups %}
+    <section class="card">
+      <header class="card-head">
+        <h2>이 항목을 참조하는 곳</h2>
+        <span class="count">{{ backlinks.total }}건</span>
+      </header>
+      <div class="backlink-badges">
+        {% for g in backlinks.groups %}
+          <span class="badge">{{ g.category_label }}<span class="badge-count">{{ g.count }}</span></span>
+        {% endfor %}
+      </div>
+      <ul class="backlink-list">
+        {% for g in backlinks.groups %}
+          {% for it in g.entries %}
+            <li>
+              <a href="{{ url_for('item_detail', category=g.category, item_id=it.item_id) }}">{{ it.name }}</a>
+              <span class="backlink-context">{{ g.category_label }} › {{ it.label }}</span>
+            </li>
+          {% endfor %}
+          {% if g.more > 0 %}
+            <li class="backlink-more">{{ g.category_label }} 외 {{ g.more }}건 더</li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+{% endblock %}

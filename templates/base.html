@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}DHO 아카이브 미러{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="{{ url_for('index') }}">
+        <span class="brand-title">대항해시대 온라인</span>
+        <span class="brand-sub">DB 아카이브 (로컬)</span>
+      </a>
+      <nav class="sidebar-nav">
+        {% for group in nav_groups %}
+          <details class="nav-group" {% if category is defined and category in group.categories | map(attribute='slug') %}open{% endif %}>
+            <summary>{{ group.title }}</summary>
+            <ul>
+              {% for c in group.categories %}
+                <li>
+                  <a class="{% if category is defined and category == c.slug %}active{% endif %}"
+                     href="{{ url_for('category_list', category=c.slug) }}">
+                    {{ c.label }}
+                    <span class="count">{{ c.cnt }}</span>
+                  </a>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endfor %}
+      </nav>
+    </aside>
+    <div class="main-col">
+      <header class="topbar">
+        <span class="topbar-title">대항해시대 온라인 DB 아카이브</span>
+      </header>
+      {% block breadcrumb_bar %}
+        <div class="breadcrumb">
+          <a href="{{ url_for('index') }}" class="breadcrumb-home" aria-label="홈">홈</a>
+          {% block breadcrumb %}{% endblock %}
+        </div>
+      {% endblock %}
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

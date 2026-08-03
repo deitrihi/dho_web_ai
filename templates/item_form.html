@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ '새 항목' if mode == 'new' else '수정' }} - {{ category_label }} - DHO 아카이브 미러{% endblock %}
+{% block breadcrumb %}
+  <span class="sep">›</span>
+  {% if group_title %}<span class="crumb">{{ group_title }}</span><span class="sep">›</span>{% endif %}
+  <a class="crumb" href="{{ url_for('category_list', category=category) }}">{{ category_label }}</a>
+  <span class="sep">›</span>
+  {% if mode == 'edit' %}
+    <a class="crumb" href="{{ url_for('item_detail', category=category, item_id=item['item_id']) }}">{{ item['name'] or item['title'] }}</a>
+    <span class="sep">›</span>
+  {% endif %}
+  <span class="crumb current">{{ '새 항목' if mode == 'new' else '수정' }}</span>
+{% endblock %}
+{% block content %}
+  <section class="card">
+    <header class="card-head">
+      <h1>{{ '새 항목 추가' if mode == 'new' else '항목 수정' }}</h1>
+      <span class="badge-tag">{{ category_label }}</span>
+    </header>
+    <form class="item-form" method="post">
+      <div class="form-field">
+        <label for="f-name">이름 *</label>
+        <input id="f-name" name="name" type="text" value="{{ item['name'] if item else '' }}" required>
+      </div>
+      <div class="form-field">
+        <label for="f-title">타이틀 (비우면 이름과 동일)</label>
+        <input id="f-title" name="title" type="text" value="{{ item['title'] if item else '' }}">
+      </div>
+      <div class="form-field">
+        <label for="f-description">설명</label>
+        <textarea id="f-description" name="description" rows="3">{{ item['description'] if item else '' }}</textarea>
+      </div>
+
+      <h2 class="form-section-title">속성</h2>
+      <div id="attr-rows">
+        {% for a in attrs %}
+          <div class="form-row">
+            <input name="attr_label" type="text" placeholder="라벨 (예: 분류)" value="{{ a.label }}">
+            <textarea name="attr_text" rows="2" placeholder="값">{{ a.text }}</textarea>
+            <button type="button" class="btn-remove-row" title="삭제">✕</button>
+          </div>
+        {% endfor %}
+      </div>
+      <button type="button" id="add-attr-row" class="btn-add-row">+ 속성 추가</button>
+
+      <h2 class="form-section-title">표</h2>
+      <p class="form-hint">
+        첫 줄은 헤더, 그 아래는 데이터 행입니다. 셀은 탭(Tab)으로 구분합니다 —
+        엑셀/스프레드시트에서 표를 복사해 그대로 붙여넣으면 됩니다.
+      </p>
+      <div id="table-blocks">
+        {% for t in tables %}
+          <div class="form-table-block">
+            <input name="table_label" type="text" placeholder="표 이름 (예: 기본 성능)" value="{{ t.label }}">
+            <textarea name="table_grid" rows="5" placeholder="내구도&#9;공격력&#9;방어력&#10;32&#9;12&#9;5">{{ t.grid }}</textarea>
+            <button type="button" class="btn-remove-row" title="삭제">✕</button>
+          </div>
+        {% endfor %}
+      </div>
+      <button type="button" id="add-table-block" class="btn-add-row">+ 표 추가</button>
+
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">저장</button>
+        <a class="btn-cancel" href="{{ url_for('item_detail', category=category, item_id=item['item_id']) if mode == 'edit' else url_for('category_list', category=category) }}">취소</a>
+      </div>
+    </form>
+  </section>
+
+  <template id="attr-row-template">
+    <div class="form-row">
+      <input name="attr_label" type="text" placeholder="라벨 (예: 분류)">
+      <textarea name="attr_text" rows="2" placeholder="값"></textarea>
+      <button type="button" class="btn-remove-row" title="삭제">✕</button>
+    </div>
+  </template>
+  <template id="table-block-template">
+    <div class="form-table-block">
+      <input name="table_label" type="text" placeholder="표 이름 (예: 기본 성능)">
+      <textarea name="table_grid" rows="5" placeholder="내구도&#9;공격력&#9;방어력&#10;32&#9;12&#9;5"></textarea>
+      <button type="button" class="btn-remove-row" title="삭제">✕</button>
+    </div>
+  </template>
+
+  <script>
+    function wireRemoveButtons(container) {
+      container.querySelectorAll(".btn-remove-row").forEach(function (btn) {
+        btn.onclick = function () { btn.closest(".form-row, .form-table-block").remove(); };
+      });
+    }
+    document.getElementById("add-attr-row").addEventListener("click", function () {
+      var tpl = document.getElementById("attr-row-template");
+      var node = tpl.content.cloneNode(true);
+      document.getElementById("attr-rows").appendChild(node);
+      wireRemoveButtons(document.getElementById("attr-rows"));
+    });
+    document.getElementById("add-table-block").addEventListener("click", function () {
+      var tpl = document.getElementById("table-block-template");
+      var node = tpl.content.cloneNode(true);
+      document.getElementById("table-blocks").appendChild(node);
+      wireRemoveButtons(document.getElementById("table-blocks"));
+    });
+    wireRemoveButtons(document.getElementById("attr-rows"));
+    wireRemoveButtons(document.getElementById("table-blocks"));
+  </script>
+{% endblock %}

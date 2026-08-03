@@ -1,0 +1,16 @@
+# 배포 대상 서버(NAS 등) 접속 정보. 이 파일을 deploy.config로 복사해서 실제 값을 채운다.
+#   cp deploy.config.example deploy.config
+# deploy.config는 .gitignore에 등록돼 있어 git에는 올라가지 않고, deploy.sh가 서버로
+# 보내는 파일 목록에서도 제외된다.
+
+DEPLOY_HOST=nas.example.com
+DEPLOY_PORT=22
+DEPLOY_USER=youruser
+
+# 비밀번호 인증을 쓸 경우 채운다. sshpass가 설치돼 있으면 자동으로 넣어주고,
+# 없으면 ssh가 물어볼 때마다(전송/확인/배포 단계별로 여러 번) 직접 입력하면 된다.
+# SSH 키 인증을 쓴다면 비워둔다.
+DEPLOY_PASSWORD=
+
+# 서버에서 프로젝트가 위치할 경로 (docker-compose.yml이 놓일 곳)
+DEPLOY_PATH=/volume1/docker/dho_dbsql

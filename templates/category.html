@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ category_label }} - DHO 아카이브 미러{% endblock %}
+{% block breadcrumb %}
+  <span class="sep">›</span>
+  {% if group_title %}<span class="crumb">{{ group_title }}</span><span class="sep">›</span>{% endif %}
+  <span class="crumb current">{{ category_label }}</span>
+{% endblock %}
+{% block content %}
+  <section class="card">
+    <header class="card-head">
+      <h1>{{ category_label }}</h1>
+      <span class="count">{{ total }}건</span>
+      <a class="btn-add-row" href="{{ url_for('item_new', category=category) }}">+ 새 항목 추가</a>
+    </header>
+    {% if columns %}
+      <div class="table-scroll">
+        <table class="list-table">
+          <thead>
+            <tr>
+              <th>
+                <a href="?sort=name&dir={{ 'desc' if sort == 'name' and dir == 'asc' else 'asc' }}">
+                  이름{% if sort == 'name' %} {{ '▲' if dir == 'asc' else '▼' }}{% endif %}
+                </a>
+              </th>
+              {% for c in columns %}
+                <th>
+                  <a href="?sort={{ c.label }}&dir={{ 'desc' if sort == c.label and dir == 'asc' else 'asc' }}">
+                    {{ c.label }}{% if sort == c.label %} {{ '▲' if dir == 'asc' else '▼' }}{% endif %}
+                  </a>
+                </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in items %}
+              <tr>
+                <td>
+                  <a href="{{ url_for('item_detail', category=category, item_id=it['item_id']) }}">
+                    {{ it['name'] or it['title'] or it['item_id'] }}
+                  </a>
+                </td>
+                {% for c in columns %}
+                  <td>{{ it[c.label] or '' }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <ul class="item-list">
+        {% for it in items %}
+          <li>
+            <a href="{{ url_for('item_detail', category=category, item_id=it['item_id']) }}">
+              {{ it['name'] or it['title'] or it['item_id'] }}
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <nav class="pager">
+      {% if page > 1 %}
+        <a href="?page={{ page - 1 }}&sort={{ sort }}&dir={{ dir }}">« 이전</a>
+      {% endif %}
+      <span>{{ page }} / {{ total_pages }}</span>
+      {% if page < total_pages %}
+        <a href="?page={{ page + 1 }}&sort={{ sort }}&dir={{ dir }}">다음 »</a>
+      {% endif %}
+    </nav>
+  </section>
+{% endblock %}

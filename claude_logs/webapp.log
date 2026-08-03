@@ -1,0 +1,75 @@
+ * Serving Flask app 'dho_webapp'
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5050
+ * Running on http://192.168.0.101:5050
+Press CTRL+C to quit
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 134-267-476
+127.0.0.1 - - [02/Aug/2026 21:52:41] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:52:41] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:52:42] "GET /certificate/1898 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:52:54] "GET /certificate/1898 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:53:02] "GET /certificate/1898 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:53:20] "GET /marineNpc/12680 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:53:20] "GET /sea/3140 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:53:20] "GET /foobar HTTP/1.1" 404 -
+127.0.0.1 - - [02/Aug/2026 21:55:06] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:06] "GET /static/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:06] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [02/Aug/2026 21:55:11] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:11] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 21:55:14] "GET /cannon/8816 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:14] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 21:55:37] "GET /aide HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:37] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 21:55:53] "GET /major HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 21:55:53] "GET /static/style.css HTTP/1.1" 304 -
+ * Detected change in 'C:\\dev\\dho\\dbsql\\dho_webapp.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 134-267-476
+ * Detected change in 'C:\\dev\\dho\\dbsql\\dho_webapp.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 134-267-476
+127.0.0.1 - - [02/Aug/2026 22:01:22] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:01:23] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:01:23] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:01:23] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:01:44] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:01:55] "GET /certificate/1898 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:10:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:10:24] "GET /static/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:10:50] "GET /cannon HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:10:51] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:10:59] "GET /cannon/8873 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:10:59] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:11:36] "GET /skill HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:11:36] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:11:38] "GET /skill/2279 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:11:38] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:12:11] "GET /equipment HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:12:12] "GET /equipment HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:12:12] "GET /ship HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:12:39] "GET /equipment/6582 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:13:03] "GET /equipment HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:13:03] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:13:10] "GET /equipment/6582 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:13:11] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:18:31] "GET /equipment/6582 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:18:31] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:22:57] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:22:57] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:22:58] "GET /quest HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:22:59] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [02/Aug/2026 22:23:04] "GET /quest/15396 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:23:04] "GET /static/style.css HTTP/1.1" 304 -
+ * Detected change in 'C:\\dev\\dho\\dbsql\\build_structured_db.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 134-267-476
+127.0.0.1 - - [02/Aug/2026 22:29:05] "GET /equipment/6582 HTTP/1.1" 200 -
+127.0.0.1 - - [02/Aug/2026 22:29:15] "GET /consumable/1016856 HTTP/1.1" 200 -
