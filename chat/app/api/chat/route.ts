@@ -4,12 +4,14 @@ import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage }
 import { z } from "zod";
 import {
   findTables,
+  getBacklinks,
   getItemDetail,
   getTableSchema,
   listCategories,
   runSql,
   searchItems,
 } from "@/lib/dho-db";
+import { logError } from "@/lib/error-log";
 
 export const runtime = "nodejs"; // lib/dho-db.ts가 node:sqlite를 쓰므로 Edge 런타임 불가
 export const maxDuration = 60;
@@ -25,12 +27,29 @@ get_item_detail 결과의 "획득_방법" 필드에는 판매 NPC/퀘스트/해�
 테이블에서 찾은 이 아이템의 실제 획득 경로가 전부 들어있습니다 — "이 아이템 어디서 구하나"
 질문은 여기만 보면 됩니다.
 
+"이 아이템을 보상으로 주는 퀘스트", "이 재료를 쓰는 레시피" 처럼 반대로 "어떤 항목이 이걸
+참조/포함하는가"를 묻는 질문(역방향)은 get_item_detail이 아니라 get_backlinks를 바로
+쓰세요. item_acquisition_*/item_detail_list를 find_tables·get_table_schema로 직접
+탐색하며 역방향 관계를 추측하지 마세요 — 이미 인덱싱된 get_backlinks가 훨씬 빠릅니다.
+
 run_sql로 쿼리를 작성하기 전에는 반드시 get_table_schema로 정확한 컬럼명을 먼저 확인하세요.
 run_sql은 SELECT 문만 허용됩니다.
 
 답변은 한국어로, 표/목록을 활용해서 간결하게 정리해서 답하세요.`;
 
 export async function POST(req: Request) {
+  try {
+    return await handleChat(req);
+  } catch (error) {
+    logError(error, { route: "/api/chat" });
+    return new Response(JSON.stringify({ error: "서버 에러가 발생했습니다." }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+}
+
+async function handleChat(req: Request): Promise<Response> {
   const { messages }: { messages: UIMessage[] } = await req.json();
   const modelMessages = await convertToModelMessages(messages);
 
@@ -48,6 +67,7 @@ export async function POST(req: Request) {
     system: SYSTEM_PROMPT,
     messages: modelMessages,
     stopWhen: stepCountIs(16),
+    onError: ({ error }) => logError(error, { route: "/api/chat", phase: "streaming" }),
     tools: {
       list_categories: tool({
         description:
@@ -65,6 +85,22 @@ export async function POST(req: Request) {
           keyword: z.string().describe("검색할 아이템/직업/컨텐츠 이름 (전체 또는 일부)"),
         }),
         execute: async ({ keyword }) => getItemDetail(keyword),
+      }),
+      get_backlinks: tool({
+        description:
+          "이 아이템/조건을 다른 항목이 참조하는 곳(역방향 링크)을 찾는다 — 출처 카테고리별로 " +
+          "개수와 목록을 반환한다. '이 아이템을 보상으로 주는 퀘스트', '이 재료를 쓰는 " +
+          "레시피/변성연금', '이 조건이 필요한 퀘스트' 처럼 '어떤 항목이 이걸 참조/포함하는가'를 " +
+          "묻는 질문(역방향)에 사용한다. get_item_detail의 '획득_방법'은 반대 방향(이 항목 " +
+          "자신을 어디서 얻는지)이라 이런 질문엔 못 쓴다. entries의 qty 필드는 '필요/보상' 같은 " +
+          "표에서 이 항목을 몇 개 주고받는지를 담고 있고, entries는 이미 qty 내림차순으로 " +
+          "정렬되어 있다 — '가장 많이 주는 퀘스트 10개' 같은 질문은 정렬된 앞쪽만 그대로 " +
+          "쓰면 된다(직접 재정렬할 필요 없음). 수량 개념이 없는 링크(예: 판매 NPC 목록)는 " +
+          "qty가 null이라 뒤쪽에 온다.",
+        inputSchema: z.object({
+          keyword: z.string().describe("검색할 아이템/조건 이름 (전체 또는 일부)"),
+        }),
+        execute: async ({ keyword }) => getBacklinks(keyword),
       }),
       search_items: tool({
         description:

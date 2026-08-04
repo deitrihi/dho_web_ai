@@ -12,10 +12,13 @@ raw_attrs/raw_tables에 이미 있는 정방향 링크(이 항목 -> 다른 항�
     python build_backlinks.py
 """
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-STRUCT_DB = Path(__file__).parent / "dho_structured.sqlite3"
+# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례 — webapp이 항목 저장 후
+# 이 스크립트를 서브프로세스로 재실행할 때 자신이 쓰는 DB 경로를 그대로 넘겨준다)
+STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 
 
 def build() -> None:

@@ -14,6 +14,8 @@ items_core/raw_attrs/raw_tables는 원본 페이지를 1:1로 그대로 옮겨�
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 from flask import Flask, g, render_template, request, abort, url_for, redirect
@@ -99,6 +101,50 @@ def get_write_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# item_backlinks/item_acquisition_*/item_transmutation_*/item_detail_list/카테고리 전용
+# 테이블(cannon 등 211개)은 전부 raw_attrs/raw_tables에서 파생되는 데이터라, webapp이 그
+# 두 테이블에 쓸 때(_save_item)마다 다시 만들어주지 않으면 chat이 webapp에서 추가/수정한
+# 항목을 못 본다. 순서: backlinks/acquisition(공유 관계 테이블) -> 카테고리 전용 테이블.
+DERIVED_PIPELINE_SCRIPTS = [
+    "build_backlinks.py",
+    "build_acquisition.py",
+    "materialize_generic.py",
+    "materialize_cannon.py",
+    "materialize_recipe.py",
+    "materialize_consumable.py",
+    "materialize_tarotcard.py",
+]
+PROJECT_ROOT = Path(__file__).parent
+
+
+def rebuild_derived_tables() -> list[str]:
+    """전체 33,496+건 기준 로컬 측정 약 12초(스크립트 7개 합계) — 증분 갱신보다 훨씬
+    단순하고, 항목 저장이 빈번한 작업이 아니라 저장 요청마다 동기로 기다려도 감당 가능하다고
+    판단해서 전체 재생성 방식을 선택했다. 실패해도 항목 저장 자체는 이미 끝난 뒤라 롤백하지
+    않고, 실패한 스크립트 이름과 stderr만 모아서 반환한다(호출부에서 로그로 남김)."""
+    errors = []
+    # PYTHONUTF8=1: 자식 스크립트의 한글 print() 출력이 콘솔 코드페이지(Windows에서는 cp949 등)
+    # 대신 항상 UTF-8로 나가게 강제 — 안 하면 부모가 UTF-8로 디코드할 때 깨진 바이트로
+    # UnicodeDecodeError가 남(플랫폼별 로케일에 따라 달라지는 문제라 명시적으로 고정해야 함).
+    env = {**os.environ, "DHO_DB_PATH": str(DB_PATH), "PYTHONUTF8": "1"}
+    for script in DERIVED_PIPELINE_SCRIPTS:
+        try:
+            result = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / script)],
+                cwd=PROJECT_ROOT,
+                env=env,
+                capture_output=True,
+                encoding="utf-8",
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"{script}: 120초 초과로 중단됨")
+            continue
+        if result.returncode != 0:
+            errors.append(f"{script}: {result.stderr.strip()[-500:]}")
+    return errors
 
 
 NEW_ITEM_ID_BASE = 900_000_000  # 나중에 원본 사이트를 재크롤링해도 item_id가 안 겹치도록
@@ -495,6 +541,9 @@ def item_new(category):
             _save_item(wdb, category, item_id, name, title, description, attrs, tables)
         finally:
             wdb.close()
+        rebuild_errors = rebuild_derived_tables()
+        for err in rebuild_errors:
+            app.logger.error("파생 테이블 재생성 실패: %s", err)
         return redirect(url_for("item_detail", category=category, item_id=item_id))
 
     return render_template(
@@ -536,6 +585,9 @@ def item_edit(category, item_id):
             _save_item(wdb, category, item_id, name, title, description, attrs, tables)
         finally:
             wdb.close()
+        rebuild_errors = rebuild_derived_tables()
+        for err in rebuild_errors:
+            app.logger.error("파생 테이블 재생성 실패: %s", err)
         return redirect(url_for("item_detail", category=category, item_id=item_id))
 
     attrs = [

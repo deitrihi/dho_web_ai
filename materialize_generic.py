@@ -20,13 +20,15 @@ cannon/recipe/consumable/tarotCard처럼 손으로 다듬은 4개 카테고리�
 - 원본 raw_attrs/raw_tables는 그대로 남아있으니 데이터 손실은 없다.
 """
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
 from build_acquisition import COVERED_HEADER_SHAPES
 
-STRUCT_DB = Path(__file__).parent / "dho_structured.sqlite3"
+# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
+STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 ALREADY_HANDCRAFTED = {"cannon", "recipe", "consumable", "tarotCard"}
 INT_RE = re.compile(r"-?\d+")
 FULL_INT_RE = re.compile(r"-?\d+")

@@ -4,11 +4,13 @@ raw_attrs/raw_tables 스테이징 데이터를 cannon 전용 테이블로 옮기
 (카테고리별 전용 테이블 방식의 파일럿 — 다른 카테고리도 이 패턴을 따라 확장)
 """
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
-STRUCT_DB = Path(__file__).parent / "dho_structured.sqlite3"
+# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
+STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 
 ATTR_COLUMNS = {
     "분류": "category_type",

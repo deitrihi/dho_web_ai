@@ -11,5 +11,11 @@ COPY dho_webapp.py ./
 COPY templates/ ./templates/
 COPY static/ ./static/
 
+# webapp이 항목 저장 직후 서브프로세스로 재실행하는 파생 테이블 재생성 스크립트들
+# (item_backlinks/item_acquisition_*/카테고리 전용 테이블 — raw_attrs/raw_tables에서
+# 파생되므로 webapp이 그 두 테이블에 쓸 때마다 다시 만들어줘야 chat도 같은 데이터를 봄)
+COPY build_backlinks.py build_acquisition.py materialize_generic.py materialize_cannon.py \
+     materialize_recipe.py materialize_consumable.py materialize_tarotcard.py ./
+
 EXPOSE 5050
 CMD ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "2", "dho_webapp:app"]

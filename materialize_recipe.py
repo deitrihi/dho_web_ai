@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """recipe 카테고리 전용 테이블 (필요 재료/스킬은 공유 item_detail_list 테이블에서 조회)"""
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
-STRUCT_DB = Path(__file__).parent / "dho_structured.sqlite3"
+# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
+STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 
 
 def init_tables(conn: sqlite3.Connection) -> None:

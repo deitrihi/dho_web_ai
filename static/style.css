@@ -48,11 +48,62 @@ a:hover { text-decoration: underline; }
   display: grid;
   grid-template-columns: 220px 1fr;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.nav-toggle span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: var(--header-fg);
+  border-radius: 1px;
+}
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  border: none;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 40;
+}
+
 @media (max-width: 768px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+  .nav-toggle { display: flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    max-width: 82vw;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.25);
+  }
+  .shell.sidebar-open .sidebar { transform: translateX(0); }
+  .shell.sidebar-open .sidebar-backdrop { display: block; }
+
+  main { padding: 14px; }
+  .topbar, .breadcrumb { padding: 0 12px; }
+  .breadcrumb { overflow-x: auto; white-space: nowrap; }
+  .nav-group summary, .nav-group li a, .sidebar-footer-link { min-height: 40px; }
+  .nav-group summary, .sidebar-footer-link { display: flex; align-items: center; }
 }
 
 .sidebar {
@@ -387,4 +438,28 @@ th:last-child, td:last-child { border-right: none; }
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  /* 속성/표 목록: 라벨을 값 위로 쌓음 (고정 120px 라벨 폭이 좁은 화면에서 값을 과도하게 압박) */
+  .row { flex-direction: column; gap: 2px; }
+  .row-label { width: auto; }
+
+  /* 항목 생성/수정 폼: 3열 그리드를 단일 컬럼으로 전환, 삭제 버튼은 오른쪽 위에 배치 */
+  .form-row {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+  }
+  .form-row input { grid-column: 1; grid-row: 1; }
+  .form-row textarea { grid-column: 1 / -1; grid-row: 2; }
+  .form-row .btn-remove-row { grid-column: 2; grid-row: 1; }
+  .form-table-block { grid-template-columns: 1fr auto; }
+
+  table { font-size: 11.5px; }
+  th, td { padding: 4px 7px; }
+
+  .category-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .backlink-list { grid-template-columns: 1fr; }
+
+  .card-head .btn-add-row { margin-left: 0; }
 }

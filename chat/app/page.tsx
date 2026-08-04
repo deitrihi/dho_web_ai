@@ -25,10 +25,15 @@ export default function Home() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-800 px-4 py-3">
-        <h1 className="text-sm font-bold">대항해시대 온라인 DB 아카이브 — AI 검색</h1>
-        <p className="text-xs text-neutral-500">dho_structured.sqlite3 기반 Text-to-SQL 챗봇</p>
+    <div className="flex min-h-dvh flex-col bg-neutral-950 text-neutral-100">
+      <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
+        <div>
+          <h1 className="text-sm font-bold">대항해시대 온라인 DB 아카이브 — AI 검색</h1>
+          <p className="text-xs text-neutral-500">dho_structured.sqlite3 기반 Text-to-SQL 챗봇</p>
+        </div>
+        <a href={`${basePath}/logs`} className="text-xs text-neutral-500 underline hover:text-neutral-300">
+          에러 로그
+        </a>
       </header>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 overflow-y-auto p-4">
@@ -45,7 +50,7 @@ export default function Home() {
           <div key={m.id} className={m.role === "user" ? "self-end" : "self-start"}>
             <div
               className={
-                "max-w-[85%] rounded-lg px-3 py-2 text-sm " +
+                "max-w-[85%] break-words rounded-lg px-3 py-2 text-sm " +
                 (m.role === "user"
                   ? "ml-auto bg-blue-600 text-white"
                   : "bg-neutral-900 border border-neutral-800")
@@ -70,9 +75,8 @@ export default function Home() {
                     <details
                       key={i}
                       className="my-1 rounded border border-neutral-700 bg-neutral-800 text-[11px] text-neutral-300"
-                      open={finished}
                     >
-                      <summary className="cursor-pointer select-none px-2 py-1 font-mono text-neutral-400">
+                      <summary className="cursor-pointer select-none break-all px-2 py-1 font-mono text-neutral-400">
                         🔧 {name}
                         {p.input ? ` ${JSON.stringify(p.input)}` : ""} — {p.state}
                       </summary>

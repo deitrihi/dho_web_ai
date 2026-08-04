@@ -2,6 +2,121 @@
 
 ## [미커밋]
 
+- build_acquisition.py — `item_detail_list`(필요/보상/연결된 장소 등 "종류/내용" 표 공유
+  테이블)에 `content_qty` 컬럼 추가해서 근본 원인 수정. 지금까지 `split_multi_links()`가
+  링크 있는 셀은 링크 텍스트만 취하고 뒤에 붙은 수량/랭크("탐색 1, 고고학 2, 이탈리아어 1"
+  의 1/2/1, "구입 발주서(카테고리 1) 5"의 5)를 통째로 버려서, 이 데이터를 쓰는 모든
+  경로(chat의 `run_sql`/`get_item_detail`, 지난 세션에 chat 쪽에서만 임시로 raw_tables를
+  재파싱해 복구했던 `get_backlinks`의 qty)가 전부 수량 정보 없이 동작하고 있었음.
+  `split_multi_links_with_qty()` 신규 — 셀을 콤마로 나눈 세그먼트 수와 링크 수가 같고 각
+  세그먼트가 해당 링크 텍스트로 시작할 때만(전체 셀의 약 88%) 신뢰하고 뒤에 남는 숫자를
+  수량으로 추출, 조건이 안 맞는 예외 케이스(약 12% — 던전/퀘스트 "필요"에 연결된 퀘스트
+  설명처럼 자유 텍스트에 링크가 여러 개 섞인 셀)는 안전하게 수량 없이 이름만 반환해서
+  회귀 없음(기존 `split_multi_links()`는 다른 3곳에서 그대로 씀 — 안 건드림). 실제 DB
+  전수 스캔(22,717개 링크 셀)으로 세그먼트/링크 수 불일치(1,895건)·접두어 불일치(747건)
+  비율 확인 후 구현, 재실행 후 quest 16029 보상(발주서 qty=5)/quest 15390 필요(탐색=1,
+  고고학=2, 이탈리아어=1)/quest 15399 예외 케이스(안전하게 qty=NULL로 폴백, 크래시나
+  오탐 없음) 직접 검증. `item_detail_list` 총 행 수(99,800) 불변 확인(컬럼만 추가, 행
+  손실 없음), qty 채워진 행 31,640건. chat의 `SELECT *` 기반 `acquisitionInfo()`가 코드
+  변경 없이 `content_qty`를 자동으로 반환하는 것도 확인 — 지난 세션에 chat에서 임시로
+  만든 `get_backlinks`의 raw_tables 재파싱 로직과 동일한 결과(발주서 top10:
+  59/56/56/55/55/55/54/54/52/52)를 이제 `item_detail_list` 직접 조회만으로 재현됨.
+  `rebuild_derived_tables()`(웹앱 저장 트리거) 전체 파이프라인 재실행으로 기존 테이블들
+  회귀 없음 확인, `/`, `/quest`, `/quest/15390`, `/cannon`, `/cannon/new`, `/assistant`
+  웹앱 라우트 재확인
+- dho_webapp.py, build_backlinks.py, build_acquisition.py, materialize_generic.py,
+  materialize_cannon.py, materialize_recipe.py, materialize_consumable.py,
+  materialize_tarotcard.py, Dockerfile — webapp과 chat이 서로 다른 데이터를 볼 수 있다는
+  사용자 지적으로 발견: `item_backlinks`/`item_acquisition_*`/`item_detail_list`/카테고리
+  전용 테이블(211개) 전부 `raw_attrs`/`raw_tables`에서 파생되는데, webapp의 항목 생성/수정
+  라우트는 이 두 테이블에만 쓰고 파생 테이블은 전혀 안 건드려서 — 지금 이 순간도 webapp으로
+  추가/수정한 항목은 chat의 `get_item_detail`/`get_backlinks`에 안 잡히는 상태였음(가정이
+  아니라 코드로 확인). 사용자가 "동기 재생성"을 선택 — `_save_item()` 저장 직후
+  `rebuild_derived_tables()`가 파생 스크립트 7개(build_backlinks -> build_acquisition ->
+  materialize_generic/cannon/recipe/consumable/tarotcard)를 서브프로세스로 순서대로
+  재실행해서 chat이 곧바로 같은 데이터를 보게 함. 스크립트들의 DB 경로를 하드코딩된
+  `Path(__file__).parent / "dho_structured.sqlite3"`에서 `DHO_DB_PATH` 환경변수로
+  오버라이드 가능하게 변경(webapp/chat과 동일한 관례 — 서브프로세스에 webapp 자신의 DB_PATH를
+  그대로 넘겨줌). Dockerfile에 이 7개 스크립트를 추가로 COPY(기존엔 dho_webapp.py만 담겨서
+  스크립트 자체가 컨테이너에 없었음 — 로컬에서만 동작하고 NAS 배포본에선 무동작이었을 버그).
+  로컬에서 실제 7개 스크립트를 실행해 전체 재생성 시간 측정(약 12초, item_backlinks
+  440,926건/item_detail_list 99,800건 등 기존 CHANGELOG 기록과 정확히 일치하는 것으로
+  안전성 확인 후 진행). subprocess 인코딩 이슈 발견 및 수정 — 자식 스크립트의 한글 출력이
+  플랫폼 로케일에 따라 깨져서 부모가 UTF-8로 디코드할 때 UnicodeDecodeError가 나던 문제,
+  `PYTHONUTF8=1` 환경변수 + `encoding="utf-8"` 명시로 고정. Flask test_client로 실제
+  `/privateFarm/new` POST → 파생 테이블(`privateFarm`) 행 수 즉시 반영(5→6) → 정리 후
+  재생성으로 원복(6→5) 전체 흐름 검증 완료. 기존 라우트(`/`, `/cannon`, `/cannon/new`,
+  `/assistant`) 회귀 없음 확인
+- chat/lib/dho-db.ts, chat/app/api/chat/route.ts — `get_backlinks`가 "몇 건 참조하는지"만
+  알려주고 "몇 개 주는지"(수량)는 안 보여준다는 피드백으로 발견: item_detail_list의
+  content_name은 링크 텍스트만 담고(예: "구입 발주서(카테고리 1)"), 정작 수량은 원본
+  raw_tables 셀 텍스트에만 남아있음(예: "구입 발주서(카테고리 1) 5" — build_acquisition.py의
+  `split_multi_links()`가 링크가 있는 셀은 링크 텍스트만 취하고 뒤에 붙은 숫자를 버리기
+  때문. `item_detail_list` 테이블 자체의 데이터 손실이라 Text-to-SQL로 직접 조회해도
+  똑같이 못 봄 — 이번엔 파이프라인/DB 재빌드 대신 chat 쪽에서만 복구).
+  `attachQuantities()` 신규: backlink 항목과 같은 (category,item_id,label) 키로
+  raw_tables를 찾아 대상 아이템 링크가 있는 셀 텍스트에서 수량을 직접 추출해 `entries`에
+  `qty` 필드로 붙임(수량 개념이 없는 링크는 null). entries는 이제 qty 내림차순으로
+  정렬되고, 이를 위해 SQL 단계의 `LIMIT 50`을 `RAW_ENTRY_FETCH_CAP=500`으로 넉넉히 올린
+  뒤 qty 계산 후 `ENTRY_OUTPUT_CAP=50`으로 재정렬-컷 — 기존엔 source_item_id 순으로 앞
+  50건만 봐서 실제 최댓값(발주서 최대 59개 주는 퀘스트)을 완전히 놓치고 있었음(정렬 없는
+  50건 안에서 최대 22로 보였음). `node --experimental-sqlite`로 실제 DB에 대고 "발주서"
+  키워드 전체 변형을 합산 재현 — 상위 10개가 실제 최댓값(59/56/56/55...)으로 정확히
+  나오는 것 확인. 도구 설명에도 "entries는 이미 qty 내림차순 정렬이니 재정렬할 필요
+  없음" 명시. `npm run build`/`npm run lint` 통과
+- chat/lib/dho-db.ts, chat/app/api/chat/route.ts — 신규 도구 `get_backlinks` 추가. 사용자가
+  "퀘스트의 보상 아이템중에 발주서를 가장 많이 주는 퀘스트 10개만 정리해줘" 같은 역방향
+  질문("어떤 항목이 이걸 참조/포함하는가")을 물었을 때 도구 호출이 15개 넘게 쌓이고도
+  답을 못 내는 걸 확인 — 기존 `get_item_detail`의 "획득_방법"은 정방향(이 항목 자신을
+  어디서 얻는지)만 다뤄서 이런 질문엔 애초에 못 쓰고, 모델이 item_acquisition_*/
+  item_detail_list를 find_tables·get_table_schema로 맨땅에서 탐색하다 스텝을 다 썼음.
+  웹앱 상세 페이지 "이 항목을 참조하는 곳" 섹션이 이미 같은 문제(역방향 조회)를
+  `item_backlinks` 테이블로 풀어놨던 것을 그대로 재사용 — 키워드로 아이템을 찾은 뒤
+  source_category별 개수 + 목록(최대 50건)을 반환. 시스템 프롬프트에도 "역방향 질문엔
+  get_backlinks를 바로 쓰고 맨땅 탐색하지 말라" 명시. `node --experimental-sqlite`로
+  실제 DB에 대고 "발주서" 키워드 테스트 — quest 138건/104건 등 정확한 backlink 카운트
+  확인. `npm run build`/`npm run lint` 통과
+- chat/lib/error-log.ts(신규), chat/app/logs/page.tsx(신규), chat/app/api/chat/route.ts,
+  chat/app/page.tsx, docker-compose.yml, chat/.gitignore — 신규: 챗봇 서버 에러 로그 조회
+  페이지(`/chat/logs`). 지금까지 서버 에러가 나면 `docker compose logs`로 SSH 접속해서
+  확인해야 했는데, 사용자가 페이지로 바로 볼 수 있게 해달라고 요청. `route.ts`의 POST
+  핸들러를 try/catch로 감싸고(요청 파싱 등 스트리밍 시작 전 에러) `streamText`에
+  `onError` 콜백을 추가(스트리밍 중 에러, 예: OpenAI API 키/네트워크 오류)해서 두 경로
+  모두 `error-log.ts`의 `logError()`로 JSONL 파일에 기록. `/logs` 페이지는 이 파일을
+  읽어 기존 `JsonValue` 컴포넌트로 표 형태로 보여줌(최신순, 최대 200건). 로그 파일 경로는
+  `DHO_CHAT_LOG_PATH` 환경변수(기본값 로컬 `.data/errors.jsonl`) — 배포 환경은
+  docker-compose.yml에 named volume(`chat_logs`)을 추가해 컨테이너 재시작/재배포에도
+  로그가 유지되도록 함(dbsql 프로젝트 폴더는 read-only 마운트라 로그를 못 씀 → 별도
+  volume 필요). 로컬에서 OPENAI_API_KEY 없이 실제로 스트리밍 에러(AI_LoadAPIKeyError)와
+  잘못된 요청 바디(JSON 파싱 에러) 둘 다 유발시켜 파일에 기록되고 `/logs` 페이지에
+  표로 렌더링되는 것까지 확인. `npm run build`/`npm run lint` 통과(Turbopack이
+  `error-log.ts`의 동적 파일 경로 때문에 NFT 관련 경고 1건을 내지만 빌드 실패는 아님 —
+  표준 출력 번들에 불필요한 파일이 약간 더 포함될 수 있다는 경고, 기능과는 무관)
+- chat/app/page.tsx — 도구 호출(get_item_detail 등) 결과 `<details>`를 완료 시 자동으로
+  펼쳐서 보여주던 것 제거. 사용자 피드백: 검색할 때마다 원본 쿼리 결과 표가 통째로 펼쳐져
+  화면을 다 차지하는데 필요한 건 최종 답변뿐 — 이제 기본 접힘 상태로 두고, 궁금하면
+  `<summary>`를 클릭해서 직접 펼쳐볼 수 있게만 유지. 최종 답변 텍스트는 기존
+  `MarkdownText`(표/목록 렌더링)가 그대로 처리
+- templates/base.html — `<meta name="viewport">` 태그 추가(근본 원인 수정: 이게 없어서
+  기존 `@media (max-width: 768px)` 규칙이 모바일에서 전혀 발동하지 않고 있었음). 토글 버튼
+  (`#nav-toggle`)과 백드롭(`#sidebar-backdrop`)을 추가해 좁은 화면에서 사이드바를 슬라이드인
+  드로어로 열고 닫는 순정 JS 삽입
+- static/style.css — 모바일(≤768px) 사이드바를 `display:none` 대신 `position:fixed` 드로어
+  (`.shell.sidebar-open`로 토글)로 전환, 햄버거 버튼/백드롭 스타일 추가. 추가로 ≤640px에서
+  `.row`(속성/표 라벨-값)를 세로 스택으로, `.form-row`/`.form-table-block`(항목 생성/수정 폼)을
+  단일 컬럼으로, `.category-grid`/`.backlink-list`의 grid `minmax`를 좁은 화면에 맞게 축소.
+  `.shell`의 `height: 100vh`가 모바일 주소창 유무에 따라 실제 화면보다 커지면서
+  `overflow:hidden`과 겹쳐 콘텐츠가 잘리던 문제도 `height: 100dvh` 폴백으로 수정
+- chat/app/page.tsx — `min-h-screen`(100vh) → `min-h-dvh`로 교체(모바일 주소창/키보드에 따라
+  하단 입력창이 화면 밖으로 밀리는 문제 방지). 도구 호출 `<summary>`의 공백 없는 JSON 텍스트와
+  메시지 버블 전체에 `break-all`/`break-words`를 추가해 좁은 화면에서 가로 스크롤이 생기던
+  문제 수정. Next.js(v16.2.12) App Router는 viewport meta를 기본 자동 삽입하는 것을
+  `node_modules/next/dist/docs`에서 확인(별도 대응 불필요)
+- Flask test_client로 `/`, `/cannon`, `/cannon/<id>`, `/cannon/new`, `/cannon/<id>/edit`,
+  `/assistant` 200 확인 + 렌더링 결과에 viewport meta/nav-toggle 마크업 포함 확인,
+  `npm run build`/`npm run lint` 통과 확인. 실제 브라우저 모바일 에뮬레이션 육안 확인은
+  이번 세션에서 미완(다음 확인 필요)
+
 ## 2026-08-04 | 77f86c6
 
 - deploy.bat — 신규: `& "C:\Program Files\Git\bin\bash.exe" ./deploy.sh` 타이핑이 번거롭다는

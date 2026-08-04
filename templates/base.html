@@ -2,12 +2,14 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}DHO 아카이브 미러{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
+  <div class="shell" id="shell">
+    <button type="button" class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></button>
+    <aside class="sidebar" id="sidebar">
       <a class="brand" href="{{ url_for('index') }}">
         <span class="brand-title">대항해시대 온라인</span>
         <span class="brand-sub">DB 아카이브 (로컬)</span>
@@ -39,6 +41,9 @@
     </aside>
     <div class="main-col">
       <header class="topbar">
+        <button type="button" class="nav-toggle" id="nav-toggle" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
         <span class="topbar-title">대항해시대 온라인 DB 아카이브</span>
       </header>
       {% block breadcrumb_bar %}
@@ -52,5 +57,20 @@
       </main>
     </div>
   </div>
+  <script>
+    (function () {
+      var shell = document.getElementById('shell');
+      var toggle = document.getElementById('nav-toggle');
+      var backdrop = document.getElementById('sidebar-backdrop');
+      function setOpen(open) {
+        shell.classList.toggle('sidebar-open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      toggle.addEventListener('click', function () {
+        setOpen(!shell.classList.contains('sidebar-open'));
+      });
+      backdrop.addEventListener('click', function () { setOpen(false); });
+    })();
+  </script>
 </body>
 </html>

@@ -7,11 +7,13 @@ raw_tables 스테이징에서 "획득 방법"류 표(카테고리 무관, 헤더
 확인했기 때문에, label이 아니라 헤더 모양으로 매핑을 판별한다.
 """
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
-STRUCT_DB = Path(__file__).parent / "dho_structured.sqlite3"
+# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
+STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 
 # materialize_generic.py가 "이미 공유 테이블로 처리된 표 모양"을 걸러낼 때 참조한다.
 # materialize() 아래 분기와 반드시 맞춰서 유지할 것.
@@ -60,6 +62,38 @@ def split_multi_links(cell: dict) -> list[dict]:
     parts = [p.strip() for p in cell["text"].split(",") if p.strip()]
     return [{"name": p, "category": None, "item_id": None} for p in parts] or [
         {"name": cell["text"], "category": None, "item_id": None}
+    ]
+
+
+def split_multi_links_with_qty(cell: dict) -> list[dict]:
+    """split_multi_links()와 같은 역할이되, "탐색 1, 고고학 2"처럼 링크 이름 뒤에 수량/랭크가
+    붙어있으면 그것도 뽑아낸다(item_detail_list의 '종류/내용' 표 전용 — 필요 스킬 랭크,
+    보상 아이템 개수 등). 콤마로 나눈 세그먼트 수가 링크 수와 같고 각 세그먼트가 해당
+    링크의 텍스트로 시작할 때만 신뢰하고 뽑는다 — 던전/퀘스트 "필요"의 연결된 퀘스트
+    설명처럼 자유 텍스트에 링크가 여러 개 섞인 예외적인 셀(전체의 약 12%)은 이 조건이
+    깨지므로 안전하게 수량 없이 이름만 반환한다(split_multi_links()와 동일한 동작)."""
+    links = cell["links"]
+    if not links:
+        parts = [p.strip() for p in cell["text"].split(",") if p.strip()]
+        return [{"name": p, "category": None, "item_id": None, "qty": None} for p in parts] or [
+            {"name": cell["text"], "category": None, "item_id": None, "qty": None}
+        ]
+
+    segments = [s.strip() for s in cell["text"].split(",")]
+    if len(segments) == len(links) and all(
+        seg.startswith(link["text"]) for seg, link in zip(segments, links)
+    ):
+        results = []
+        for seg, link in zip(segments, links):
+            suffix = seg[len(link["text"]):].strip()
+            qty = int(suffix) if re.fullmatch(r"\d+", suffix) else None
+            results.append(
+                {"name": link["text"], "category": link["category"], "item_id": link["item_id"], "qty": qty}
+            )
+        return results
+
+    return [
+        {"name": l["text"], "category": l["category"], "item_id": l["item_id"], "qty": None} for l in links
     ]
 
 
@@ -159,11 +193,14 @@ def init_tables(conn: sqlite3.Connection) -> None:
         );
 
         -- '종류/내용' 2열 표 (필요/보상/연결된 장소 등 다수 섹션이 공유하는 가장 흔한 모양).
-        -- source_label로 어떤 섹션(필요/보상/...)이었는지 구분한다.
+        -- source_label로 어떤 섹션(필요/보상/...)이었는지 구분한다. content_qty는 원본 셀
+        -- 텍스트에 "이름 수량"처럼 링크 뒤에 붙어있던 숫자(필요 스킬 랭크, 보상 아이템
+        -- 개수 등) — 패턴이 안 맞는 예외적인 셀(자유 텍스트에 링크가 섞인 경우 등)은 NULL.
         CREATE TABLE item_detail_list (
             category TEXT, item_id INTEGER, source_label TEXT,
             type_text TEXT,
-            content_name TEXT, content_category TEXT, content_item_id INTEGER
+            content_name TEXT, content_category TEXT, content_item_id INTEGER,
+            content_qty INTEGER
         );
 
         -- 아직 매핑 안 된 표 모양 (검토용 원본 보존)
@@ -384,10 +421,13 @@ def materialize() -> None:
             bump("detail_list")
             for row in rows:
                 type_cell, content_cell = row
-                for c in split_multi_links(content_cell):
+                for c in split_multi_links_with_qty(content_cell):
                     conn.execute(
-                        "INSERT INTO item_detail_list VALUES (?,?,?,?,?,?,?)",
-                        (category, item_id, label, type_cell["text"], c["name"], c["category"], c["item_id"]),
+                        "INSERT INTO item_detail_list VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            category, item_id, label, type_cell["text"],
+                            c["name"], c["category"], c["item_id"], c["qty"],
+                        ),
                     )
 
         else:

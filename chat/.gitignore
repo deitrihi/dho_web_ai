@@ -37,6 +37,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local error log (DHO_CHAT_LOG_PATH 기본값 — 배포 환경은 named volume 사용)
+/.data/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

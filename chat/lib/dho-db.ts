@@ -6,6 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 const DB_PATH =
   process.env.DHO_DB_PATH ?? path.join(process.cwd(), "..", "dho_structured.sqlite3");
 const MAX_ROWS = Number(process.env.DHO_MAX_ROWS ?? 200);
+// get_backlinks 전용: qty로 재정렬하기 전에 넉넉히 가져올 상한 / 정렬 후 최종 반환 상한
+// (흔한 재료는 backlink가 수천 건까지 있어 무제한으로 가져오면 응답이 지나치게 커짐).
+const RAW_ENTRY_FETCH_CAP = 500;
+const ENTRY_OUTPUT_CAP = 50;
 
 function connect(): DatabaseSync {
   return new DatabaseSync(DB_PATH, { readOnly: true, open: true });
@@ -99,6 +103,138 @@ export function searchItems(keyword: string): unknown[] {
           "WHERE name LIKE ? OR title LIKE ? LIMIT 30"
       )
       .all(`%${keyword}%`, `%${keyword}%`);
+  } finally {
+    db.close();
+  }
+}
+
+type RawLink = { category: string; item_id: number; text: string };
+type RawCell = { text: string; links: RawLink[] };
+
+// raw_tables 셀 텍스트("구입 발주서(카테고리 1) 5")에서 링크 자체의 표시 텍스트
+// ("구입 발주서(카테고리 1)")를 뺀 나머지가 숫자만 남으면 그게 수량이다. 링크 텍스트가
+// 앞부분과 정확히 일치하지 않거나(레이아웃이 다른 경우) 남는 텍스트가 숫자가 아니면
+// 수량이 명시되지 않은 것으로 보고 null을 반환한다.
+function extractQuantity(cellText: string, linkText: string): number | null {
+  if (!cellText.startsWith(linkText)) return null;
+  const suffix = cellText.slice(linkText.length).trim();
+  return /^\d+$/.test(suffix) ? Number(suffix) : null;
+}
+
+// item_backlinks는 "누가 참조하는가"만 알려주고 수량은 없다(애초에 그런 개념이 없는
+// 링크도 섞여 있어서). "종류/내용"(필요/보상 등) 표에서 온 backlink는 원본 raw_tables
+// 셀 텍스트에 수량이 그대로 남아있으므로, 같은 (category,item_id,label) 키로 raw_tables를
+// 찾아 대상 아이템 링크가 있는 셀에서 수량을 뽑아 entries에 붙여준다.
+function attachQuantities(
+  db: DatabaseSync,
+  sourceCategory: string,
+  sourceLabel: string,
+  entries: { source_item_id: number; name: string | null; title: string | null; source_label: string }[],
+  target: { category: string; item_id: number }
+): ((typeof entries)[number] & { qty: number | null })[] {
+  const ids = [...new Set(entries.map((e) => e.source_item_id))];
+  const placeholders = ids.map(() => "?").join(",");
+  const tables = ids.length
+    ? (db
+        .prepare(
+          `SELECT item_id, rows_json FROM raw_tables WHERE category = ? AND label = ? AND item_id IN (${placeholders})`
+        )
+        .all(sourceCategory, sourceLabel, ...ids) as { item_id: number; rows_json: string }[])
+    : [];
+
+  const qtyByItem = new Map<number, number>();
+  for (const { item_id, rows_json } of tables) {
+    if (qtyByItem.has(item_id)) continue;
+    const rows = JSON.parse(rows_json) as RawCell[][];
+    findQty: for (const row of rows) {
+      for (const cell of row) {
+        const link = cell.links.find(
+          (l) => l.category === target.category && l.item_id === target.item_id
+        );
+        if (!link) continue;
+        const qty = extractQuantity(cell.text, link.text);
+        if (qty !== null) {
+          qtyByItem.set(item_id, qty);
+          break findQty;
+        }
+      }
+    }
+  }
+
+  return entries.map((e) => ({ ...e, qty: qtyByItem.get(e.source_item_id) ?? null }));
+}
+
+// 이 아이템/조건을 다른 항목이 참조하는 곳(역방향 링크)을 찾는다 — 웹앱 상세 페이지의
+// "이 항목을 참조하는 곳" 섹션과 같은 데이터(item_backlinks). "이 아이템을 보상으로 주는
+// 퀘스트", "이 재료를 쓰는 레시피"처럼 "어떤 항목이 이걸 참조/포함하는가"를 묻는 질문은
+// get_item_detail(정방향: 이 항목 자신의 획득처)로는 못 찾고 이 함수로 찾아야 한다.
+// entries의 qty는 "종류/내용"(필요/보상 등) 표에서 온 backlink에서만 채워지고, 그 외
+// (판매 NPC 목록 등 수량 개념이 없는 링크)는 null이다.
+export function getBacklinks(keyword: string): unknown[] {
+  const db = connect();
+  try {
+    const matches = db
+      .prepare(
+        "SELECT category, item_id, name, title FROM items_core " +
+          "WHERE name LIKE ? OR title LIKE ? LIMIT 10"
+      )
+      .all(`%${keyword}%`, `%${keyword}%`) as {
+      category: string;
+      item_id: number;
+      name: string | null;
+      title: string | null;
+    }[];
+
+    return matches.map((m) => {
+      const bySource = db
+        .prepare(
+          "SELECT source_category, COUNT(*) as count FROM item_backlinks " +
+            "WHERE target_category = ? AND target_item_id = ? " +
+            "GROUP BY source_category ORDER BY count DESC"
+        )
+        .all(m.category, m.item_id) as { source_category: string; count: number }[];
+
+      const backlinks = bySource.map((g) => {
+        const rawEntries = db
+          .prepare(
+            "SELECT b.source_item_id, ic.name, ic.title, b.source_label FROM item_backlinks b " +
+              "JOIN items_core ic ON ic.category = b.source_category AND ic.item_id = b.source_item_id " +
+              "WHERE b.target_category = ? AND b.target_item_id = ? AND b.source_category = ? " +
+              // 수량(qty)순으로 최종 정렬해서 상위 ENTRY_OUTPUT_CAP개를 뽑아야 하므로,
+              // SQL 단계에서는 정렬 기준(qty)을 아직 몰라 source_item_id 순으로 넉넉히
+              // 가져온 뒤(RAW_ENTRY_FETCH_CAP) 아래에서 qty로 재정렬한다.
+              `ORDER BY b.source_item_id LIMIT ${RAW_ENTRY_FETCH_CAP}`
+          )
+          .all(m.category, m.item_id, g.source_category) as {
+          source_item_id: number;
+          name: string | null;
+          title: string | null;
+          source_label: string;
+        }[];
+
+        const byLabel = new Map<string, typeof rawEntries>();
+        for (const e of rawEntries) {
+          const list = byLabel.get(e.source_label) ?? [];
+          list.push(e);
+          byLabel.set(e.source_label, list);
+        }
+        const entries = [...byLabel.entries()]
+          .flatMap(([label, list]) =>
+            attachQuantities(db, g.source_category, label, list, {
+              category: m.category,
+              item_id: m.item_id,
+            })
+          )
+          // qty가 있으면 큰 순서로("가장 많이 주는" 류 질문에 바로 답할 수 있게), qty가
+          // 없는 항목(수량 개념이 없는 링크)은 뒤로 보낸다.
+          .sort((a, b) => (b.qty ?? -1) - (a.qty ?? -1))
+          .slice(0, ENTRY_OUTPUT_CAP);
+
+        return { source_category: g.source_category, count: g.count, entries };
+      });
+
+      return { category: m.category, item_id: m.item_id, name: m.name, title: m.title, backlinks };
+    });
   } finally {
     db.close();
   }
