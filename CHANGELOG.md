@@ -2,6 +2,8 @@
 
 ## [미커밋]
 
+## 2026-08-04 | 77f86c6
+
 - deploy.bat — 신규: `& "C:\Program Files\Git\bin\bash.exe" ./deploy.sh` 타이핑이 번거롭다는
   피드백으로 더블클릭 실행용 런처 추가(인자 그대로 전달, Git Bash 미설치 시 안내 후 종료,
   종료 후 pause로 결과 확인 가능). 한글 주석/echo 문구를 넣었더니 cmd.exe가 UTF-8 멀티바이트
