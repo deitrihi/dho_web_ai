@@ -7,10 +7,29 @@ DEPLOY_HOST=nas.example.com
 DEPLOY_PORT=22
 DEPLOY_USER=youruser
 
-# 비밀번호 인증을 쓸 경우 채운다. sshpass가 설치돼 있으면 자동으로 넣어주고,
-# 없으면 ssh가 물어볼 때마다(전송/확인/배포 단계별로 여러 번) 직접 입력하면 된다.
-# SSH 키 인증을 쓴다면 비워둔다.
-DEPLOY_PASSWORD=
+# SSH 키 인증에 쓸 개인키 경로. 비워두면 ssh 기본 동작(~/.ssh/id_* 자동 탐색 또는
+# ssh-agent)을 따른다. 비밀번호 인증은 지원하지 않는다 — 원격에서 docker compose
+# build까지 스크립트 한 번으로 끝내려면 ssh든 sudo든 비밀번호를 물어보는 순간
+# 세션이 멈추거나 실패하기 때문. 최초 1회, NAS에 공개키를 등록하고 배포 계정을
+# docker 그룹에 넣어둔다 (그래야 sudo 없이 docker 명령이 된다):
+#   ssh -t youruser@nas.example.com "sudo usermod -aG docker youruser"
+#   cat ~/.ssh/id_ed25519_nas.pub | ssh youruser@nas.example.com \
+#     "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+DEPLOY_KEY=~/.ssh/id_ed25519_nas
 
 # 서버에서 프로젝트가 위치할 경로 (docker-compose.yml이 놓일 곳)
 DEPLOY_PATH=/volume1/docker/dho_dbsql
+
+# rsync가 로컬/서버 양쪽에 있어도 일부 NAS(예: 로그인 그룹이 admin인 UGREEN OS 계정)에서는
+# SSH 위에서 rsync가 "invalid path"로 거부될 수 있다. 이럴 때 tar로 강제 전환한다
+# (DEPLOY_RSYNC_TARGET을 쓰면 이 값은 무시됨. 증분 전송은 안 됨).
+DEPLOY_TRANSFER=
+
+# NAS의 "Rsync 백업 서비스"(데몬 모드) 사용 시 채운다 — SSH 위 rsync보다 안정적이고
+# 증분 전송도 된다. NAS 관리 패널에서 서비스를 켜고 계정/비밀번호를 설정한 뒤 "모듈/하위경로"
+# 형식으로 적는다 — 예를 들어 "docker" 모듈이 DEPLOY_PATH의 상위 폴더(/volume1/docker)에
+# 매핑돼 있고 그 아래 dho_dbsql 폴더를 쓴다면 docker/dho_dbsql. 비워두면 위 DEPLOY_TRANSFER
+# 로직을 그대로 쓴다. rsync 데몬 인증은 SSH 키와 별개라 DEPLOY_RSYNC_PASSWORD를 항상 채워야 한다.
+DEPLOY_RSYNC_TARGET=
+DEPLOY_RSYNC_PORT=873
+DEPLOY_RSYNC_PASSWORD=

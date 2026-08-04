@@ -4,6 +4,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useState } from "react";
+import { JsonValue, MarkdownText } from "./components/rich-content";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -36,11 +37,15 @@ export default function Home() {
             예: &quot;준사관 우대 스킬 알려줘&quot;, &quot;코모두스 황제의 검 어디서 구해?&quot;
           </p>
         )}
-        {messages.map((m) => (
+        {messages.map((m, idx) => {
+          const hasText = m.parts.some((part) => part.type === "text");
+          const stalled =
+            m.role === "assistant" && !hasText && !busy && idx === messages.length - 1;
+          return (
           <div key={m.id} className={m.role === "user" ? "self-end" : "self-start"}>
             <div
               className={
-                "max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap " +
+                "max-w-[85%] rounded-lg px-3 py-2 text-sm " +
                 (m.role === "user"
                   ? "ml-auto bg-blue-600 text-white"
                   : "bg-neutral-900 border border-neutral-800")
@@ -48,7 +53,7 @@ export default function Home() {
             >
               {m.parts.map((part, i) => {
                 if (part.type === "text") {
-                  return <span key={i}>{part.text}</span>;
+                  return <MarkdownText key={i} text={part.text} />;
                 }
                 if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
                   const p = part as {
@@ -56,23 +61,44 @@ export default function Home() {
                     toolName?: string;
                     state: string;
                     input?: unknown;
+                    output?: unknown;
+                    errorText?: string;
                   };
                   const name = p.toolName ?? p.type.replace(/^tool-/, "");
+                  const finished = p.state === "output-available" || p.state === "output-error";
                   return (
-                    <div
+                    <details
                       key={i}
-                      className="my-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 font-mono text-[11px] text-neutral-400"
+                      className="my-1 rounded border border-neutral-700 bg-neutral-800 text-[11px] text-neutral-300"
+                      open={finished}
                     >
-                      🔧 {name}
-                      {p.input ? ` ${JSON.stringify(p.input)}` : ""} — {p.state}
-                    </div>
+                      <summary className="cursor-pointer select-none px-2 py-1 font-mono text-neutral-400">
+                        🔧 {name}
+                        {p.input ? ` ${JSON.stringify(p.input)}` : ""} — {p.state}
+                      </summary>
+                      {finished && (
+                        <div className="border-t border-neutral-700 px-2 py-1.5">
+                          {p.state === "output-available" && <JsonValue value={p.output} />}
+                          {p.state === "output-error" && (
+                            <span className="text-red-400">{p.errorText}</span>
+                          )}
+                        </div>
+                      )}
+                    </details>
                   );
                 }
                 return null;
               })}
             </div>
+            {stalled && (
+              <p className="mt-1 text-xs text-amber-500">
+                ⚠️ 도구 호출 한도에 도달해 답변을 끝맺지 못했습니다. 질문을 좀 더 구체적으로
+                나눠서 다시 물어봐 주세요.
+              </p>
+            )}
           </div>
-        ))}
+          );
+        })}
         {error && (
           <p className="text-sm text-red-400">오류가 발생했습니다: {error.message}</p>
         )}

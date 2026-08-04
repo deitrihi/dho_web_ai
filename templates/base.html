@@ -30,6 +30,12 @@
           </details>
         {% endfor %}
       </nav>
+      <div class="sidebar-footer">
+        <a class="sidebar-footer-link {% if request.path == url_for('chat_ai') %}active{% endif %}"
+           href="{{ url_for('chat_ai') }}">
+          chat.ai
+        </a>
+      </div>
     </aside>
     <div class="main-col">
       <header class="topbar">

@@ -29,6 +29,15 @@ def _q(identifier: str) -> str:
 DB_PATH = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 PER_PAGE = 100
 
+# chat/ 챗봇의 실제 접속 주소. 외부에서는 도메인 443 하나로만 들어오고, nginx가 그 안에서
+# "/"는 webapp:5050으로, "/chat"은 chat:3000으로 나눠서 프록시해준다 — 즉 브라우저 입장에서
+# webapp과 chat은 이미 같은 origin(도메인+443)에 있으므로, 기본값은 상대경로 "/chat"이면
+# nginx가 알아서 chat 컨테이너로 넘겨준다(포트를 브라우저가 알 필요 없음).
+# nginx 없이 webapp을 직접 접속해서 테스트할 때만(로컬 python dho_webapp.py, 또는 NAS를
+# IP:5050으로 직접 접속) 상대경로가 webapp 자신의 포트로 풀려버려 안 통하므로, 그럴 때만
+# DHO_CHAT_URL=http://<host>:3000/chat 처럼 절대경로로 오버라이드해서 확인한다.
+CHAT_URL = os.environ.get("DHO_CHAT_URL", "/chat")
+
 app = Flask(__name__)
 # {% %} 블록 태그 주변 개행/들여쓰기를 렌더링 결과에 안 남기게 함. 안 그러면 표 셀/속성값에
 # white-space:pre-wrap을 쓸 때(원본 텍스트의 의도된 줄바꿈을 보존하려고) 템플릿 자체의
@@ -229,6 +238,16 @@ def inject_nav_groups():
 def index():
     db = get_db()
     return render_template("index.html", groups=get_nav_groups(db))
+
+
+@app.route("/assistant")
+def chat_ai():
+    # "/chat"으로 시작하는 경로는 절대 쓰면 안 됨 — nginx의 `location /chat`은 접두어
+    # 매칭이라 "/chat-ai" 같은 경로도 그 규칙에 걸려서 chat 컨테이너(3000)로 넘어가 버리고,
+    # 거긴 그런 라우트가 없어서 404가 남(webapp까지 요청이 오지도 못함). 그래서 wrapper
+    # 페이지는 "chat"과 무관한 "/assistant"에 두고, 안의 iframe만 CHAT_URL("/chat")을
+    # 가리키게 한다.
+    return render_template("chat.html", chat_url=CHAT_URL)
 
 
 LIST_MAX_COLS = 7

@@ -2,6 +2,78 @@
 
 ## [미커밋]
 
+- deploy.bat — 신규: `& "C:\Program Files\Git\bin\bash.exe" ./deploy.sh` 타이핑이 번거롭다는
+  피드백으로 더블클릭 실행용 런처 추가(인자 그대로 전달, Git Bash 미설치 시 안내 후 종료,
+  종료 후 pause로 결과 확인 가능). 한글 주석/echo 문구를 넣었더니 cmd.exe가 UTF-8 멀티바이트
+  줄을 파싱하다 다음 줄 앞부분까지 깨뜨리는 문제 발견(BOM 추가, `chcp 65001` 둘 다 시도했지만
+  재현됨) — batch 파일 자체는 ASCII만 쓰도록 전부 영어로 작성해 해결. `deploy.bat webapp`
+  실제 실행으로 전송→빌드→기동까지 정상 동작 확인(컨테이너 `Running`)
+- deploy.sh — `dho_structured.sqlite3`를 전송 제외 목록에 추가. webapp의 항목 추가/수정
+  기능으로 서버 쪽 DB가 로컬보다 최신일 수 있어서, 배포할 때마다 로컬(구버전)로 덮어써버리는
+  사고를 막음. rsync는 --exclude된 파일을 비교 대상에서 빼서 --delete로도 안 건드리고, tar는
+  아카이브에 없는 파일이라 추출 시 서버 파일이 그대로 유지됨(두 전송 모드 모두 안전).
+  관련 안내 메시지/주석도 함께 정리
+- deploy.sh, deploy.config.example — 비밀번호 인증(sshpass)/원격 `sudo docker compose`를
+  SSH 키 인증(`DEPLOY_KEY`) + 원격 사용자를 docker 그룹에 넣는 방식으로 교체. 사용자가 겪던
+  "docker build가 deploy에서 처리 안 돼서 매번 직접 SSH로 들어가서 처리" 문제의 원인은 두
+  가지였음 — (1) sshpass 미설치라 ssh가 물어볼 때마다 수동 입력 필요, (2) 최근 추가된
+  `sudo docker compose`가 pty 없는 원격 세션에서 실행돼 sudo 비밀번호를 못 받고 조용히
+  실패. NAS(`deitrihi@192.168.0.200`)에 전용 키(`~/.ssh/id_ed25519_nas`) 등록 +
+  `usermod -aG docker deitrihi`로 sudo 없이 docker 접근 가능하게 만든 뒤 `./deploy.sh`
+  실행으로 비밀번호 프롬프트 0회, 전송→빌드→기동까지 한 번에 끝나는 것 실제 확인
+  (webapp/chat 컨테이너 정상 기동). `deploy.config`의 평문 `DEPLOY_PASSWORD`도 제거
+  (rsync 데몬 인증용 `DEPLOY_RSYNC_PASSWORD`만 별도 유지, SSH 인증과는 무관)
+- deploy.sh — 사용자가 `wsl ./deploy.sh`로 실행하다 `DEPLOY_KEY=~/.ssh/...`를 못 찾는 오류 발견
+  (WSL 홈 디렉터리가 Git Bash와 별개 파일시스템). WSL의 rsync로 DB(245MB) 증분 전송하려던
+  용도였는데, 같은 LAN이라 Git Bash의 tar 전체 전송도 충분히 빨라 WSL 없이 Git Bash로만
+  실행하기로 결정 — 스크립트 상단에 안내 주석 추가
+- chat/app/components/rich-content.tsx(신규), chat/app/page.tsx, chat/package.json — 챗봇
+  응답이 항상 raw 텍스트(`<span>`)로만 나오던 문제 수정. 시스템 프롬프트는 "표/목록을
+  활용해서" 답하라고 지시하는데 프론트는 마크다운을 파싱 안 해서 `| 이름 | 값 |` 같은
+  원문이 그대로 보였음. `react-markdown`+`remark-gfm`(표/취소선 등 GFM)+`remark-breaks`
+  (마크다운 미사용 응답도 기존처럼 단일 줄바꿈 유지)로 텍스트 파트를 렌더링하도록 교체.
+  tool 호출 파트도 `JSON.stringify` 한 줄 표시 대신 `<details>`로 접어두고(스트리밍 중엔
+  접힘, 완료 시 자동 펼침), 결과가 배열-of-객체면 표로, 객체면 key-value 목록으로 재귀
+  렌더링하는 `JsonValue` 컴포넌트로 교체(list_categories/get_item_detail/run_sql 등 6개
+  도구 결과 전부 공통 처리). `npm run build`/`npm run lint` 통과, dev 서버로 페이지 200
+  렌더링 확인(실제 LLM 응답 스트리밍은 API 키 미설정 환경이라 미검증)
+- chat/app/api/chat/route.ts, chat/app/page.tsx — 실사용 중 발견: 도구 호출이 많이 필요한
+  질문("포술을 얻을 수 있는 NPC 위치/이름")에서 `stopWhen: stepCountIs(8)`에 정확히
+  걸려(스크린샷에 도구 호출 8개) 최종 답변 텍스트를 생성할 스텝 없이 스트림이 그냥
+  끝나버리는 버그 수정 — 사용자에게는 아무 응답 없이 "멈춘" 것처럼 보였음. 스텝 한도를
+  16으로 상향. 앞으로도 한도에 걸릴 가능성은 남아있어, 마지막 assistant 메시지가 텍스트
+  파트 없이 끝나면(스트리밍 종료 후) "도구 호출 한도 도달" 경고 문구를 표시하도록
+  `page.tsx`에 fallback 추가
+- deploy.sh — 1/4 로컬 빌드 검증 단계를 docker가 실제로 동작할 때만 실행하도록 수정.
+  WSL로 실행할 때(rsync 때문에 필요) Docker Desktop WSL 통합이 안 붙어 있으면 `/mnt/c`를
+  통해 보이는 Windows docker.exe가 "WSL Integration을 켜라"는 안내문을 콘솔에 직접 찍고
+  종료 코드 0으로 끝나버려서(stdout/stderr 캡처로 안 잡힘) `command -v`/exit code로는 구분이
+  안 됐음 — `docker info` 출력에 "Server Version" 문자열이 실제로 캡처되는지로 판별하도록
+  변경, Git Bash(정상)/WSL(통합 안 됨) 양쪽에서 직접 확인. 이 단계는 필수가 아니라 사전
+  검증용이라 안 되면 그냥 건너뛰고 4/4(NAS에서 빌드)로 진행됨
+- deploy.sh, deploy.config.example — rsync 데몬(NAS의 "Rsync 백업 서비스") 전송 모드 추가.
+  SSH 위에서 rsync를 돌리는 기존 방식은 UGREEN OS에서 admin 그룹 계정의 euid 상승 실패로
+  "invalid path" 오류가 나는 걸 확인했는데(DEPLOY_TRANSFER=tar로 우회 가능하게 해뒀던 문제),
+  NAS의 Rsync 백업 서비스(데몬, 포트 873)를 켜고 `DEPLOY_RSYNC_TARGET`(모듈/하위경로,
+  예: `docker/dho_dbsql`)을 설정하면 이 경로를 아예 안 타서 문제없이 동작하는 것을 실제
+  NAS에 대고 읽기/쓰기/삭제까지 직접 확인함. 전송 방식 우선순위를 rsync 데몬 → SSH 위
+  rsync → tar 순으로 정리(`DEPLOY_RSYNC_TARGET` > `DEPLOY_TRANSFER` > 자동판별).
+  `DEPLOY_RSYNC_PASSWORD`(데몬 비밀번호가 DEPLOY_PASSWORD와 다를 때만)도 추가
+- dho_webapp.py, templates/base.html, templates/chat.html(신규), static/style.css — 왼쪽 사이드바
+  하단에 "chat.ai" 메뉴 추가. `/assistant` 라우트가 base.html 레이아웃(사이드바 유지) 안에
+  `<iframe src="{{ chat_url }}">`로 챗봇을 임베드. wrapper 라우트 경로를 `/chat`으로
+  시작하지 않게 잡은 이유: 운영 환경에서는 nginx가 외부 도메인 443 하나로 들어온 요청을
+  `/`→webapp:5050, `/chat`→chat:3000로 나눠 프록시해주는데, `location /chat`은 접두어
+  매칭이라 `/chat-ai`처럼 "chat"으로 시작하는 경로는 전부 그 규칙에 걸려서 chat
+  컨테이너(3000)로 잘못 넘어가 버림(webapp까지 요청이 오지도 못하고 chat 쪽에 없는
+  라우트라 404). 게다가 nginx 없이 webapp에 직접 붙었을 땐 `/<category>` 캐치올 라우트가
+  먼저 "chat"을 존재하지 않는 카테고리로 처리해 또 다른 404를 냄(사용자가 애초에 겪은
+  버그 원인). 두 문제를 한 번에 피하려고 wrapper 경로를 아예 `/assistant`로 정함
+  (처음엔 `/chat-ai`로 했다가 nginx 접두어 충돌로 404 재발 확인 후 변경).
+  iframe 대상 주소는 `DHO_CHAT_URL` 환경변수로 지정(기본값 `/chat` — nginx가 같은
+  origin에서 알아서 chat 컨테이너로 넘겨주므로 브라우저가 포트를 몰라도 됨. nginx 없이
+  webapp을 직접 접속해서 테스트할 때만 `DHO_CHAT_URL=http://<host>:3000/chat`처럼
+  절대경로로 오버라이드)
 - deploy.sh — 소스 전송 전에 로컬에서 `docker compose build`로 먼저 빌드해보는 단계(1/4) 추가.
   실제 이미지 빌드는 그대로 NAS에서 `docker compose up --build`로 하지만(사용자가 그 방식을
   선택), 256MB 넘는 DB까지 전송한 뒤 NAS에서 빌드가 깨진 걸 알게 되는 상황을 막으려고 로컬

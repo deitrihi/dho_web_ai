@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
     system: SYSTEM_PROMPT,
     messages: modelMessages,
-    stopWhen: stepCountIs(8),
+    stopWhen: stepCountIs(16),
     tools: {
       list_categories: tool({
         description:
