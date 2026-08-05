@@ -2,6 +2,19 @@
 
 ## [미커밋]
 
+- build_search_index.py — 신규: `items_core`(name/title/description) +
+  `raw_attrs`(속성 라벨/값)를 대상으로 한 FTS5 전문검색 인덱스(`items_fts`,
+  trigram 토크나이저) 빌드 스크립트. 기존 `search_items`/`get_item_detail`/
+  `get_backlinks`가 `name LIKE '%keyword%'`만 써서 인덱스를 못 타고(풀스캔),
+  description·raw_attrs는 검색 대상에서 빠져있던 문제 해결.
+- dho_webapp.py — `DERIVED_PIPELINE_SCRIPTS`에 `build_search_index.py` 추가해서
+  원본 데이터 파이프라인 재실행 시 검색 인덱스도 항상 같이 갱신되게 함.
+- chat/lib/dho-db.ts — `searchItems`/`getItemDetail`/`getBacklinks`의 키워드
+  매칭 로직을 `findMatchingItems()` 헬퍼로 통합하고 FTS5 MATCH + `bm25()` 정렬로
+  교체(3글자 미만 키워드는 trigram 인덱싱 한계로 기존 LIKE 폴백). MATCH 쿼리는
+  큰따옴표로 감싸 구문(phrase) 검색을 강제해 공백 분리/FTS5 예약어 오인식을 방지.
+- dho_structured.sqlite3 — `items_fts` 가상 테이블 신규 생성(33,496건 적재).
+
 ## 2026-08-05 | 0aa3c3b
 
 - materialize_generic.py — `build_category_table`/`build_relation_tables`가 "1,500"처럼

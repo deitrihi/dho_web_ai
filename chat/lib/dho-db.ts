@@ -15,6 +15,37 @@ function connect(): DatabaseSync {
   return new DatabaseSync(DB_PATH, { readOnly: true, open: true });
 }
 
+// items_fts(FTS5, trigram 토크나이저)로 name/title/description/raw_attrs 속성값까지
+// 부분일치 검색한다. trigram은 3글자 미만은 인덱싱하지 않으므로(SQLite 제약) 그보다
+// 짧은 키워드는 기존 LIKE 방식으로 폴백한다.
+const FTS_MIN_LENGTH = 3;
+
+// MATCH에 넘기는 키워드를 큰따옴표로 감싸 "구문(phrase)" 검색으로 강제한다 — 안 그러면
+// 공백이 AND로 쪼개지거나(예: "조합 등록" -> 조합 AND 등록) AND/OR 같은 FTS5 예약어가
+// 든 키워드가 검색 문법으로 해석돼버린다.
+function ftsPhrase(keyword: string): string {
+  return `"${keyword.replace(/"/g, '""')}"`;
+}
+
+type ItemMatch = { category: string; item_id: number; name: string | null; title: string | null };
+
+function findMatchingItems(db: DatabaseSync, keyword: string, limit: number): ItemMatch[] {
+  if ([...keyword].length >= FTS_MIN_LENGTH) {
+    return db
+      .prepare(
+        `SELECT category, item_id, name, title FROM items_fts ` +
+          `WHERE items_fts MATCH ? ORDER BY bm25(items_fts) LIMIT ${limit}`
+      )
+      .all(ftsPhrase(keyword)) as ItemMatch[];
+  }
+  return db
+    .prepare(
+      `SELECT category, item_id, name, title FROM items_core ` +
+        `WHERE name LIKE ? OR title LIKE ? LIMIT ${limit}`
+    )
+    .all(`%${keyword}%`, `%${keyword}%`) as ItemMatch[];
+}
+
 // item_id/row_index/position이나 "{라벨}_id" 외래키 컬럼은 수량이 아니라 식별자라서
 // 콤마를 붙이면 "12,345" 같은 값처럼 오해할 수 있다 -> formatNumber 대상에서 제외한다.
 const ID_LIKE_NAMES = new Set(["item_id", "row_index", "position"]);
@@ -79,21 +110,14 @@ export function listCategories(): { category: string; count: number }[] {
 export function getItemDetail(keyword: string): unknown[] {
   const db = connect();
   try {
-    const matches = db
-      .prepare(
-        "SELECT category, item_id, name, title, description FROM items_core " +
-          "WHERE name LIKE ? OR title LIKE ? LIMIT 10"
-      )
-      .all(`%${keyword}%`, `%${keyword}%`) as {
-      category: string;
-      item_id: number;
-      name: string | null;
-      title: string | null;
-      description: string | null;
-    }[];
+    const matches = findMatchingItems(db, keyword, 10);
 
     return matches.map((m) => {
       const entry: Record<string, unknown> = { ...m };
+      const descRow = db
+        .prepare("SELECT description FROM items_core WHERE category = ? AND item_id = ?")
+        .get(m.category, m.item_id) as { description: string | null } | undefined;
+      if (descRow) entry.description = descRow.description;
       const tableExists = db
         .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
         .get(m.category);
@@ -115,12 +139,7 @@ export function getItemDetail(keyword: string): unknown[] {
 export function searchItems(keyword: string): unknown[] {
   const db = connect();
   try {
-    return db
-      .prepare(
-        "SELECT category, item_id, name, title FROM items_core " +
-          "WHERE name LIKE ? OR title LIKE ? LIMIT 30"
-      )
-      .all(`%${keyword}%`, `%${keyword}%`);
+    return findMatchingItems(db, keyword, 30);
   } finally {
     db.close();
   }
@@ -191,17 +210,7 @@ function attachQuantities(
 export function getBacklinks(keyword: string): unknown[] {
   const db = connect();
   try {
-    const matches = db
-      .prepare(
-        "SELECT category, item_id, name, title FROM items_core " +
-          "WHERE name LIKE ? OR title LIKE ? LIMIT 10"
-      )
-      .all(`%${keyword}%`, `%${keyword}%`) as {
-      category: string;
-      item_id: number;
-      name: string | null;
-      title: string | null;
-    }[];
+    const matches = findMatchingItems(db, keyword, 10);
 
     return matches.map((m) => {
       const bySource = db

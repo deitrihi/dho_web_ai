@@ -115,6 +115,7 @@ DERIVED_PIPELINE_SCRIPTS = [
     "materialize_recipe.py",
     "materialize_consumable.py",
     "materialize_tarotcard.py",
+    "build_search_index.py",
 ]
 PROJECT_ROOT = Path(__file__).parent
 
