@@ -2,6 +2,8 @@
 
 ## [미커밋]
 
+## 2026-08-05 | 0aa3c3b
+
 - materialize_generic.py — `build_category_table`/`build_relation_tables`가 "1,500"처럼
   천단위 콤마 포함 숫자를 콤마 제거 없이 정수 판별해서, 콤마 있는 숫자 컬럼이 전부 TEXT로
   새고 원문 그대로(콤마 포함) 저장되던 문제 수정. `build_relation_tables`는 헤더별 값을
