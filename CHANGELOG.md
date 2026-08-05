@@ -2,6 +2,8 @@
 
 ## [미커밋]
 
+## 2026-08-05 | f0a1f8c
+
 - build_search_index.py — 신규: `items_core`(name/title/description) +
   `raw_attrs`(속성 라벨/값)를 대상으로 한 FTS5 전문검색 인덱스(`items_fts`,
   trigram 토크나이저) 빌드 스크립트. 기존 `search_items`/`get_item_detail`/
