@@ -131,7 +131,9 @@ def materialize() -> None:
                 skipped_attrs.add(label)
                 continue
             if col in INT_COLUMNS:
-                m = re.search(r"-?\d+", text)
+                # 원본 값이 "1,032"처럼 천단위 콤마를 포함하면 콤마 앞자리만 잡히므로
+                # (예: 1) 먼저 콤마를 제거하고 매칭한다.
+                m = re.search(r"-?\d+", text.replace(",", ""))
                 cols[col] = int(m.group()) if m else None
             else:
                 cols[col] = text

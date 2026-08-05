@@ -38,6 +38,13 @@ def q(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def strip_commas(text: str) -> str:
+    """원본 사이트가 "1,500"처럼 천단위 콤마를 넣은 채로 숫자를 표기하는 경우가 있어,
+    정수 판별/파싱 전에 콤마를 제거해야 "1,500" 같은 값이 TEXT로 새거나 콤마 앞자리만
+    잘려 저장되는 걸 막을 수 있다."""
+    return text.replace(",", "")
+
+
 def build_category_table(conn: sqlite3.Connection, category: str) -> dict:
     table = category
     conn.execute(f"DROP TABLE IF EXISTS {q(table)}")
@@ -57,7 +64,7 @@ def build_category_table(conn: sqlite3.Connection, category: str) -> dict:
             (category, label),
         ).fetchall()
         texts = [t for _, t, _ in rows if t]
-        all_int = bool(texts) and all(FULL_INT_RE.fullmatch(t.strip()) for t in texts)
+        all_int = bool(texts) and all(FULL_INT_RE.fullmatch(strip_commas(t.strip())) for t in texts)
         link_counts = [len(json.loads(lj)) for _, _, lj in rows]
         has_fk = any(c == 1 for c in link_counts) and all(c <= 1 for c in link_counts)
 
@@ -95,7 +102,7 @@ def build_category_table(conn: sqlite3.Connection, category: str) -> dict:
             text, links = attrs.get(label, (None, []))
             meta = label_meta[label]
             if meta["all_int"] and text:
-                m = INT_RE.search(text)
+                m = INT_RE.search(strip_commas(text))
                 values.append(int(m.group()) if m else None)
             else:
                 values.append(text)
@@ -127,17 +134,37 @@ def build_relation_tables(conn: sqlite3.Connection, category: str) -> dict:
                 if h not in union_headers:
                     union_headers.append(h)
 
+        # 값 컬럼 타입을 정하려면 먼저 헤더별 텍스트를 전부 모아 숫자 여부를 판별해야 한다
+        # (콤마 포함 "1,500" 같은 값도 전부 숫자로 인정 -> strip_commas 후 판별).
+        header_texts: dict[str, list[str]] = {h: [] for h in union_headers}
+        for _, headers, rows in entries:
+            for row in rows:
+                if len(row) != len(headers):
+                    continue
+                cell_by_header = dict(zip(headers, row))
+                for h in union_headers:
+                    cell = cell_by_header.get(h)
+                    if cell is not None and cell["text"]:
+                        header_texts[h].append(cell["text"])
+        header_all_int = {
+            h: bool(header_texts[h])
+            and all(FULL_INT_RE.fullmatch(strip_commas(t.strip())) for t in header_texts[h])
+            for h in union_headers
+        }
+        value_col = {h: (h + "_num" if header_all_int[h] else h + "_text") for h in union_headers}
+
         table = f"{category}__{label}"
         conn.execute(f"DROP TABLE IF EXISTS {q(table)}")
         col_defs = ["item_id INTEGER", "row_index INTEGER"]
         for h in union_headers:
-            col_defs.append(f"{q(h + '_text')} TEXT")
+            col_type = "INTEGER" if header_all_int[h] else "TEXT"
+            col_defs.append(f"{q(value_col[h])} {col_type}")
             col_defs.append(f"{q(h + '_id')} INTEGER")
             col_defs.append(f"{q(h + '_분류')} TEXT")
         conn.execute(f"CREATE TABLE {q(table)} ({', '.join(col_defs)})")
 
         col_names = ["item_id", "row_index"] + [
-            c for h in union_headers for c in (h + "_text", h + "_id", h + "_분류")
+            c for h in union_headers for c in (value_col[h], h + "_id", h + "_분류")
         ]
         placeholders = ",".join("?" * len(col_names))
         insert_sql = f"INSERT INTO {q(table)} ({','.join(q(c) for c in col_names)}) VALUES ({placeholders})"
@@ -155,7 +182,11 @@ def build_relation_tables(conn: sqlite3.Connection, category: str) -> dict:
                         values.extend([None, None, None])
                         continue
                     link = cell["links"][0] if cell["links"] else None
-                    values.append(cell["text"])
+                    if header_all_int[h] and cell["text"]:
+                        m = INT_RE.search(strip_commas(cell["text"]))
+                        values.append(int(m.group()) if m else None)
+                    else:
+                        values.append(cell["text"])
                     values.append(link["item_id"] if link else None)
                     values.append(link["category"] if link else None)
                 conn.execute(insert_sql, values)

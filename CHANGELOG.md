@@ -2,6 +2,24 @@
 
 ## [미커밋]
 
+- materialize_generic.py — `build_category_table`/`build_relation_tables`가 "1,500"처럼
+  천단위 콤마 포함 숫자를 콤마 제거 없이 정수 판별해서, 콤마 있는 숫자 컬럼이 전부 TEXT로
+  새고 원문 그대로(콤마 포함) 저장되던 문제 수정. `build_relation_tables`는 헤더별 값을
+  먼저 모아 숫자 여부를 판별하는 2-pass 구조로 재구성, 전부 숫자면 `{header}_num INTEGER`
+  컬럼 생성(콤마 제거 후 저장), 아니면 기존처럼 `{header}_text TEXT` 유지.
+- materialize_cannon.py — INT_COLUMNS 파싱 정규식이 콤마에서 멈추는 첫 숫자 런만 잡아서
+  "1,032" 같은 값이 관통력(penetration)에 **1**로 잘못 저장되던 별도 버그(콤마-TEXT
+  문제보다 심각한 조용한 데이터 손상) 수정.
+- dho_structured.sqlite3 — 위 수정 반영해 파생 테이블 7개 재생성(build_backlinks ->
+  build_acquisition -> materialize_generic -> materialize_cannon -> materialize_recipe ->
+  materialize_consumable -> materialize_tarotcard). 214개 테이블 전부 재생성 전/후 행 수
+  일치 확인, 백업은 `dho_structured.sqlite3.bak-before-comma-fix`로 보존(커밋 대상 아님).
+- openwebui_tool_dho_sql.py — `format_number()` 추가, `run_sql` 반환 결과의 숫자 값에
+  세자리마다 콤마를 붙여 반환하도록 변경(`item_id`/`row_index`/`position`/`*_id` 같은
+  식별자 컬럼은 수량이 아니므로 제외).
+- chat/lib/dho-db.ts — `formatNumber()`를 위 Python 로직 그대로 포팅, `runSql` 결과에
+  동일하게 적용.
+
 ## 2026-08-05 | 1a5e423
 
 - build_acquisition.py — `item_detail_list`(필요/보상/연결된 장소 등 "종류/내용" 표 공유

@@ -15,6 +15,24 @@ function connect(): DatabaseSync {
   return new DatabaseSync(DB_PATH, { readOnly: true, open: true });
 }
 
+// item_id/row_index/position이나 "{라벨}_id" 외래키 컬럼은 수량이 아니라 식별자라서
+// 콤마를 붙이면 "12,345" 같은 값처럼 오해할 수 있다 -> formatNumber 대상에서 제외한다.
+const ID_LIKE_NAMES = new Set(["item_id", "row_index", "position"]);
+
+// 숫자 값을 세자리마다 콤마를 넣은 문자열로 바꾼다. 숫자가 아니면 그대로 반환한다.
+function formatNumber(value: unknown): unknown {
+  return typeof value === "number" ? value.toLocaleString("en-US") : value;
+}
+
+function formatRow(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(row).map(([k, v]) => [
+      k,
+      ID_LIKE_NAMES.has(k) || k.endsWith("_id") ? v : formatNumber(v),
+    ])
+  );
+}
+
 // item_acquisition_*/item_transmutation_*/item_detail_list 공유 테이블에서 이 아이템의
 // 획득처/변성연금 정보를 전부 모아 온다. 이 테이블들은 카테고리 전용 테이블(예: certificate)과
 // 별도로 존재해서, item_id로 직접 조인하지 않으면 검색에서 누락되기 쉽다.
@@ -276,7 +294,7 @@ export function runSql(query: string): { row_count: number; rows: unknown[] } | 
   const db = connect();
   try {
     const rows = db.prepare(`SELECT * FROM (${stripped}) LIMIT ${MAX_ROWS}`).all();
-    return { row_count: rows.length, rows };
+    return { row_count: rows.length, rows: rows.map((r) => formatRow(r as Record<string, unknown>)) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   } finally {

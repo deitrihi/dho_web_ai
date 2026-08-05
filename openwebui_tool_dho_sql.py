@@ -13,6 +13,24 @@ import sqlite3
 
 from pydantic import BaseModel, Field
 
+# item_id/row_index/position이나 "{라벨}_id" 외래키 컬럼은 수량이 아니라 식별자라서
+# 콤마를 붙이면 "12,345" 같은 값처럼 오해할 수 있다 -> format_number 대상에서 제외한다.
+_ID_LIKE_NAMES = {"item_id", "row_index", "position"}
+
+
+def format_number(value):
+    """정수/실수 값을 세자리마다 콤마를 넣은 문자열로 바꾼다. 숫자가 아니면 그대로 반환한다."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    return f"{value:,}"
+
+
+def _format_row(row: dict) -> dict:
+    return {
+        k: (v if k in _ID_LIKE_NAMES or k.endswith("_id") else format_number(v))
+        for k, v in row.items()
+    }
+
 
 class Tools:
     class Valves(BaseModel):
@@ -214,7 +232,7 @@ class Tools:
                 f"SELECT * FROM ({stripped}) LIMIT {int(self.valves.max_rows)}"
             )
             cols = [d[0] for d in cur.description]
-            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            rows = [_format_row(dict(zip(cols, r))) for r in cur.fetchall()]
         except sqlite3.Error as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
         finally:
