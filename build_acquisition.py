@@ -7,13 +7,10 @@ raw_tables 스테이징에서 "획득 방법"류 표(카테고리 무관, 헤더
 확인했기 때문에, label이 아니라 헤더 모양으로 매핑을 판별한다.
 """
 import json
-import os
 import re
-import sqlite3
-from pathlib import Path
+from contextlib import ExitStack
 
-# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
-STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
+from pg_conn import connect
 
 # materialize_generic.py가 "이미 공유 테이블로 처리된 표 모양"을 걸러낼 때 참조한다.
 # materialize() 아래 분기와 반드시 맞춰서 유지할 것.
@@ -97,123 +94,124 @@ def split_multi_links_with_qty(cell: dict) -> list[dict]:
     ]
 
 
-def init_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS item_acquisition_seller;
-        DROP TABLE IF EXISTS item_acquisition_recipe;
-        DROP TABLE IF EXISTS item_acquisition_recipe_skill;
-        DROP TABLE IF EXISTS item_acquisition_recipe_material;
-        DROP TABLE IF EXISTS item_transmutation_policy;
-        DROP TABLE IF EXISTS item_transmutation_skill;
-        DROP TABLE IF EXISTS item_transmutation_material;
-        DROP TABLE IF EXISTS item_acquisition_marine_npc;
-        DROP TABLE IF EXISTS item_acquisition_marine_npc_sea;
-        DROP TABLE IF EXISTS item_acquisition_treasuremap;
-        DROP TABLE IF EXISTS item_acquisition_quest;
-        DROP TABLE IF EXISTS item_acquisition_npc_location;
-        DROP TABLE IF EXISTS item_acquisition_from_item;
-        DROP TABLE IF EXISTS item_acquisition_directsale;
-        DROP TABLE IF EXISTS item_detail_list;
-        DROP TABLE IF EXISTS item_acquisition_unmapped;
+def init_tables(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DROP TABLE IF EXISTS item_acquisition_seller;
+            DROP TABLE IF EXISTS item_acquisition_recipe;
+            DROP TABLE IF EXISTS item_acquisition_recipe_skill;
+            DROP TABLE IF EXISTS item_acquisition_recipe_material;
+            DROP TABLE IF EXISTS item_transmutation_policy;
+            DROP TABLE IF EXISTS item_transmutation_skill;
+            DROP TABLE IF EXISTS item_transmutation_material;
+            DROP TABLE IF EXISTS item_acquisition_marine_npc;
+            DROP TABLE IF EXISTS item_acquisition_marine_npc_sea;
+            DROP TABLE IF EXISTS item_acquisition_treasuremap;
+            DROP TABLE IF EXISTS item_acquisition_quest;
+            DROP TABLE IF EXISTS item_acquisition_npc_location;
+            DROP TABLE IF EXISTS item_acquisition_from_item;
+            DROP TABLE IF EXISTS item_acquisition_directsale;
+            DROP TABLE IF EXISTS item_detail_list;
+            DROP TABLE IF EXISTS item_acquisition_unmapped;
 
-        CREATE TABLE item_acquisition_seller (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            seller_npc TEXT, region TEXT,
-            place_name TEXT, place_category TEXT, place_item_id INTEGER
-        );
+            CREATE TABLE item_acquisition_seller (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                seller_npc TEXT, region TEXT,
+                place_name TEXT, place_category TEXT, place_item_id INTEGER
+            );
 
-        CREATE TABLE item_acquisition_recipe (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            recipe_book_name TEXT, recipe_book_item_id INTEGER,
-            recipe_name TEXT, recipe_item_id INTEGER
-        );
-        CREATE TABLE item_acquisition_recipe_skill (
-            category TEXT, item_id INTEGER, recipe_item_id INTEGER,
-            skill_name TEXT, skill_item_id INTEGER, skill_level INTEGER
-        );
-        CREATE TABLE item_acquisition_recipe_material (
-            category TEXT, item_id INTEGER, recipe_item_id INTEGER,
-            material_name TEXT, material_category TEXT, material_item_id INTEGER, material_qty INTEGER
-        );
+            CREATE TABLE item_acquisition_recipe (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                recipe_book_name TEXT, recipe_book_item_id INTEGER,
+                recipe_name TEXT, recipe_item_id INTEGER
+            );
+            CREATE TABLE item_acquisition_recipe_skill (
+                category TEXT, item_id INTEGER, recipe_item_id INTEGER,
+                skill_name TEXT, skill_item_id INTEGER, skill_level INTEGER
+            );
+            CREATE TABLE item_acquisition_recipe_material (
+                category TEXT, item_id INTEGER, recipe_item_id INTEGER,
+                material_name TEXT, material_category TEXT, material_item_id INTEGER, material_qty INTEGER
+            );
 
-        -- '변성연금'(정책/스킬/재료) 및 '획득 방법'(스킬/재료/정책/기본소재) 두 표 모양 모두 여기로 통합
-        CREATE TABLE item_transmutation_policy (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            policy_name TEXT, policy_item_id INTEGER,
-            base_material_name TEXT, base_material_category TEXT, base_material_item_id INTEGER
-        );
-        CREATE TABLE item_transmutation_skill (
-            category TEXT, item_id INTEGER, policy_item_id INTEGER,
-            skill_name TEXT, skill_item_id INTEGER, skill_level INTEGER
-        );
-        CREATE TABLE item_transmutation_material (
-            category TEXT, item_id INTEGER, policy_item_id INTEGER,
-            material_name TEXT, material_category TEXT, material_item_id INTEGER, material_qty INTEGER
-        );
+            -- '변성연금'(정책/스킬/재료) 및 '획득 방법'(스킬/재료/정책/기본소재) 두 표 모양 모두 여기로 통합
+            CREATE TABLE item_transmutation_policy (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                policy_name TEXT, policy_item_id INTEGER,
+                base_material_name TEXT, base_material_category TEXT, base_material_item_id INTEGER
+            );
+            CREATE TABLE item_transmutation_skill (
+                category TEXT, item_id INTEGER, policy_item_id INTEGER,
+                skill_name TEXT, skill_item_id INTEGER, skill_level INTEGER
+            );
+            CREATE TABLE item_transmutation_material (
+                category TEXT, item_id INTEGER, policy_item_id INTEGER,
+                material_name TEXT, material_category TEXT, material_item_id INTEGER, material_qty INTEGER
+            );
 
-        CREATE TABLE item_acquisition_marine_npc (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            npc_name TEXT, npc_item_id INTEGER, fleet_count TEXT, feature_text TEXT
-        );
-        CREATE TABLE item_acquisition_marine_npc_sea (
-            category TEXT, item_id INTEGER, npc_item_id INTEGER,
-            sea_name TEXT, sea_item_id INTEGER
-        );
+            CREATE TABLE item_acquisition_marine_npc (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                npc_name TEXT, npc_item_id INTEGER, fleet_count TEXT, feature_text TEXT
+            );
+            CREATE TABLE item_acquisition_marine_npc_sea (
+                category TEXT, item_id INTEGER, npc_item_id INTEGER,
+                sea_name TEXT, sea_item_id INTEGER
+            );
 
-        CREATE TABLE item_acquisition_treasuremap (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            treasuremap_name TEXT, treasuremap_item_id INTEGER, requirement_text TEXT,
-            destination_name TEXT, destination_category TEXT, destination_item_id INTEGER
-        );
+            CREATE TABLE item_acquisition_treasuremap (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                treasuremap_name TEXT, treasuremap_item_id INTEGER, requirement_text TEXT,
+                destination_name TEXT, destination_category TEXT, destination_item_id INTEGER
+            );
 
-        CREATE TABLE item_acquisition_quest (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            sea_name TEXT, sea_item_id INTEGER,
-            quest_name TEXT, quest_item_id INTEGER,
-            city_name TEXT, city_item_id INTEGER,
-            detail_text TEXT
-        );
+            CREATE TABLE item_acquisition_quest (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                sea_name TEXT, sea_item_id INTEGER,
+                quest_name TEXT, quest_item_id INTEGER,
+                city_name TEXT, city_item_id INTEGER,
+                detail_text TEXT
+            );
 
-        CREATE TABLE item_acquisition_npc_location (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            region TEXT, city_name TEXT, city_item_id INTEGER,
-            npc_name TEXT, npc_item_id INTEGER, npc_category TEXT
-        );
+            CREATE TABLE item_acquisition_npc_location (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                region TEXT, city_name TEXT, city_item_id INTEGER,
+                npc_name TEXT, npc_item_id INTEGER, npc_category TEXT
+            );
 
-        CREATE TABLE item_acquisition_from_item (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            source_name TEXT, source_category TEXT, source_item_id INTEGER
-        );
+            CREATE TABLE item_acquisition_from_item (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                source_name TEXT, source_category TEXT, source_item_id INTEGER
+            );
 
-        -- 캐시샵류 직접 판매 (판매기간/수량/가격)
-        CREATE TABLE item_acquisition_directsale (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            sale_period TEXT, qty INTEGER, price_krw INTEGER
-        );
+            -- 캐시샵류 직접 판매 (판매기간/수량/가격)
+            CREATE TABLE item_acquisition_directsale (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                sale_period TEXT, qty INTEGER, price_krw INTEGER
+            );
 
-        -- '종류/내용' 2열 표 (필요/보상/연결된 장소 등 다수 섹션이 공유하는 가장 흔한 모양).
-        -- source_label로 어떤 섹션(필요/보상/...)이었는지 구분한다. content_qty는 원본 셀
-        -- 텍스트에 "이름 수량"처럼 링크 뒤에 붙어있던 숫자(필요 스킬 랭크, 보상 아이템
-        -- 개수 등) — 패턴이 안 맞는 예외적인 셀(자유 텍스트에 링크가 섞인 경우 등)은 NULL.
-        CREATE TABLE item_detail_list (
-            category TEXT, item_id INTEGER, source_label TEXT,
-            type_text TEXT,
-            content_name TEXT, content_category TEXT, content_item_id INTEGER,
-            content_qty INTEGER
-        );
+            -- '종류/내용' 2열 표 (필요/보상/연결된 장소 등 다수 섹션이 공유하는 가장 흔한 모양).
+            -- source_label로 어떤 섹션(필요/보상/...)이었는지 구분한다. content_qty는 원본 셀
+            -- 텍스트에 "이름 수량"처럼 링크 뒤에 붙어있던 숫자(필요 스킬 랭크, 보상 아이템
+            -- 개수 등) — 패턴이 안 맞는 예외적인 셀(자유 텍스트에 링크가 섞인 경우 등)은 NULL.
+            CREATE TABLE item_detail_list (
+                category TEXT, item_id INTEGER, source_label TEXT,
+                type_text TEXT,
+                content_name TEXT, content_category TEXT, content_item_id INTEGER,
+                content_qty INTEGER
+            );
 
-        -- 아직 매핑 안 된 표 모양 (검토용 원본 보존)
-        CREATE TABLE item_acquisition_unmapped (
-            category TEXT, item_id INTEGER, label TEXT, headers_json TEXT, rows_json TEXT
-        );
-        """
-    )
+            -- 아직 매핑 안 된 표 모양 (검토용 원본 보존)
+            CREATE TABLE item_acquisition_unmapped (
+                category TEXT, item_id INTEGER, label TEXT, headers_json TEXT, rows_json TEXT
+            );
+            """
+        )
     conn.commit()
 
 
 def materialize() -> None:
-    conn = sqlite3.connect(STRUCT_DB)
+    conn = connect()
     init_tables(conn)
 
     stats = {}
@@ -222,9 +220,18 @@ def materialize() -> None:
         stats[shape] = stats.get(shape, 0) + 1
 
     malformed = 0
-    for category, item_id, label, headers_json, rows_json in conn.execute(
-        "SELECT category, item_id, label, headers_json, rows_json FROM raw_tables"
-    ):
+    with conn.cursor() as read_cur:
+        read_cur.execute("SELECT category, item_id, label, headers_json, rows_json FROM raw_tables")
+        table_rows = read_cur.fetchall()
+
+    # 개별 INSERT를 수만 번 순차 실행하면 매번 네트워크 왕복이 생겨 SQLite 대비 크게
+    # 느려진다(로컬에서도 build_acquisition.py 혼자 120초를 넘김) — pipeline 모드로
+    # 여러 statement를 묶어서 보내 왕복 횟수를 줄인다. 아래 for 루프를 통째로 들여쓰지
+    # 않으려고 ExitStack으로 진입만 해두고 루프가 끝난 뒤 명시적으로 닫는다.
+    pipeline_stack = ExitStack()
+    pipeline_stack.enter_context(conn.pipeline())
+    cur = conn.cursor()
+    for category, item_id, label, headers_json, rows_json in table_rows:
         headers = tuple(json.loads(headers_json))
         rows_all = json.loads(rows_json)
         # 중첩 rowspan 등으로 셀 개수가 헤더 수와 안 맞는(파싱이 부정확한) 행은 걸러내고
@@ -232,8 +239,8 @@ def materialize() -> None:
         rows = [r for r in rows_all if len(r) == len(headers)]
         if len(rows) != len(rows_all):
             malformed += len(rows_all) - len(rows)
-            conn.execute(
-                "INSERT INTO item_acquisition_unmapped VALUES (?,?,?,?,?)",
+            cur.execute(
+                "INSERT INTO item_acquisition_unmapped VALUES (%s,%s,%s,%s,%s)",
                 (category, item_id, f"{label} (행 길이 불일치, 원본 보존)", headers_json, rows_json),
             )
         if not rows:
@@ -244,8 +251,8 @@ def materialize() -> None:
             for row in rows:
                 seller, region, place = row[0]["text"], row[1]["text"], row[2]
                 for p in split_multi_links(place):
-                    conn.execute(
-                        "INSERT INTO item_acquisition_seller VALUES (?,?,?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_acquisition_seller VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                         (category, item_id, label, seller, region, p["name"], p["category"], p["item_id"]),
                     )
 
@@ -256,8 +263,8 @@ def materialize() -> None:
                 book_link = book_cell["links"][0] if book_cell["links"] else None
                 recipe_link = recipe_cell["links"][0] if recipe_cell["links"] else None
                 recipe_item_id = recipe_link["item_id"] if recipe_link else None
-                conn.execute(
-                    "INSERT INTO item_acquisition_recipe VALUES (?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_recipe VALUES (%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label,
                         book_cell["text"], book_link["item_id"] if book_link else None,
@@ -265,13 +272,13 @@ def materialize() -> None:
                     ),
                 )
                 for skill in parse_name_qty_pairs(skill_cell["text"], skill_cell["links"]):
-                    conn.execute(
-                        "INSERT INTO item_acquisition_recipe_skill VALUES (?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_acquisition_recipe_skill VALUES (%s,%s,%s,%s,%s,%s)",
                         (category, item_id, recipe_item_id, skill["name"], skill["item_id"], skill["qty"]),
                     )
                 for material in parse_name_qty_pairs(material_cell["text"], material_cell["links"]):
-                    conn.execute(
-                        "INSERT INTO item_acquisition_recipe_material VALUES (?,?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_acquisition_recipe_material VALUES (%s,%s,%s,%s,%s,%s,%s)",
                         (
                             category, item_id, recipe_item_id, material["name"],
                             material["category"], material["item_id"], material["qty"],
@@ -289,8 +296,8 @@ def materialize() -> None:
                 policy_link = policy_cell["links"][0] if policy_cell["links"] else None
                 policy_item_id = policy_link["item_id"] if policy_link else None
                 base_link = base_cell["links"][0] if base_cell and base_cell["links"] else None
-                conn.execute(
-                    "INSERT INTO item_transmutation_policy VALUES (?,?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_transmutation_policy VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label, policy_cell["text"], policy_item_id,
                         base_cell["text"] if base_cell else None,
@@ -299,13 +306,13 @@ def materialize() -> None:
                     ),
                 )
                 for skill in parse_name_qty_pairs(skill_cell["text"], skill_cell["links"]):
-                    conn.execute(
-                        "INSERT INTO item_transmutation_skill VALUES (?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_transmutation_skill VALUES (%s,%s,%s,%s,%s,%s)",
                         (category, item_id, policy_item_id, skill["name"], skill["item_id"], skill["qty"]),
                     )
                 for material in parse_name_qty_pairs(material_cell["text"], material_cell["links"]):
-                    conn.execute(
-                        "INSERT INTO item_transmutation_material VALUES (?,?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_transmutation_material VALUES (%s,%s,%s,%s,%s,%s,%s)",
                         (
                             category, item_id, policy_item_id, material["name"],
                             material["category"], material["item_id"], material["qty"],
@@ -322,16 +329,16 @@ def materialize() -> None:
                     feature_cell = None
                 npc_link = npc_cell["links"][0] if npc_cell["links"] else None
                 npc_item_id = npc_link["item_id"] if npc_link else None
-                conn.execute(
-                    "INSERT INTO item_acquisition_marine_npc VALUES (?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_marine_npc VALUES (%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label, npc_cell["text"], npc_item_id,
                         fleet_cell["text"], feature_cell["text"] if feature_cell else None,
                     ),
                 )
                 for sea in split_multi_links(sea_cell):
-                    conn.execute(
-                        "INSERT INTO item_acquisition_marine_npc_sea VALUES (?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_acquisition_marine_npc_sea VALUES (%s,%s,%s,%s,%s)",
                         (category, item_id, npc_item_id, sea["name"], sea["item_id"]),
                     )
 
@@ -341,8 +348,8 @@ def materialize() -> None:
                 map_cell, dest_cell = row
                 map_link = map_cell["links"][0] if map_cell["links"] else None
                 dest_link = dest_cell["links"][0] if dest_cell["links"] else None
-                conn.execute(
-                    "INSERT INTO item_acquisition_treasuremap VALUES (?,?,?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_treasuremap VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label,
                         map_link["text"] if map_link else map_cell["text"],
@@ -363,8 +370,8 @@ def materialize() -> None:
                 city_links = [l for l in quest_cell["links"] if l["category"] == "city"]
                 quest_link = quest_links[0] if quest_links else None
                 city_link = city_links[-1] if city_links else None
-                conn.execute(
-                    "INSERT INTO item_acquisition_quest VALUES (?,?,?,?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_quest VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label,
                         sea_cell["text"], sea_link["item_id"] if sea_link else None,
@@ -382,8 +389,8 @@ def materialize() -> None:
                 region_cell, city_cell, npc_cell = row
                 city_link = city_cell["links"][0] if city_cell["links"] else None
                 npc_link = npc_cell["links"][0] if npc_cell["links"] else None
-                conn.execute(
-                    "INSERT INTO item_acquisition_npc_location VALUES (?,?,?,?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_npc_location VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label, region_cell["text"],
                         city_cell["text"], city_link["item_id"] if city_link else None,
@@ -397,8 +404,8 @@ def materialize() -> None:
             for row in rows:
                 (cell,) = row
                 for src in split_multi_links(cell):
-                    conn.execute(
-                        "INSERT INTO item_acquisition_from_item VALUES (?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_acquisition_from_item VALUES (%s,%s,%s,%s,%s,%s)",
                         (category, item_id, label, src["name"], src["category"], src["item_id"]),
                     )
 
@@ -408,8 +415,8 @@ def materialize() -> None:
                 period_cell, qty_cell, price_cell = row
                 qty_m = re.search(r"\d+", qty_cell["text"])
                 price_m = re.search(r"[\d,]+", price_cell["text"])
-                conn.execute(
-                    "INSERT INTO item_acquisition_directsale VALUES (?,?,?,?,?,?)",
+                cur.execute(
+                    "INSERT INTO item_acquisition_directsale VALUES (%s,%s,%s,%s,%s,%s)",
                     (
                         category, item_id, label, period_cell["text"],
                         int(qty_m.group()) if qty_m else None,
@@ -422,8 +429,8 @@ def materialize() -> None:
             for row in rows:
                 type_cell, content_cell = row
                 for c in split_multi_links_with_qty(content_cell):
-                    conn.execute(
-                        "INSERT INTO item_detail_list VALUES (?,?,?,?,?,?,?,?)",
+                    cur.execute(
+                        "INSERT INTO item_detail_list VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                         (
                             category, item_id, label, type_cell["text"],
                             c["name"], c["category"], c["item_id"], c["qty"],
@@ -432,11 +439,13 @@ def materialize() -> None:
 
         else:
             bump(f"UNMAPPED:{headers}")
-            conn.execute(
-                "INSERT INTO item_acquisition_unmapped VALUES (?,?,?,?,?)",
+            cur.execute(
+                "INSERT INTO item_acquisition_unmapped VALUES (%s,%s,%s,%s,%s)",
                 (category, item_id, label, headers_json, rows_json),
             )
 
+    cur.close()
+    pipeline_stack.close()
     conn.commit()
     print("[집계]")
     for shape, count in sorted(stats.items(), key=lambda x: -x[1]):

@@ -20,22 +20,15 @@ cannon/recipe/consumable/tarotCard처럼 손으로 다듬은 4개 카테고리�
 - 원본 raw_attrs/raw_tables는 그대로 남아있으니 데이터 손실은 없다.
 """
 import json
-import os
 import re
-import sqlite3
-from pathlib import Path
+from contextlib import ExitStack
 
 from build_acquisition import COVERED_HEADER_SHAPES
+from pg_conn import connect, q
 
-# DHO_DB_PATH로 오버라이드 가능 (dho_webapp.py/chat과 동일한 관례)
-STRUCT_DB = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
 ALREADY_HANDCRAFTED = {"cannon", "recipe", "consumable", "tarotCard"}
 INT_RE = re.compile(r"-?\d+")
 FULL_INT_RE = re.compile(r"-?\d+")
-
-
-def q(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
 
 
 def strip_commas(text: str) -> str:
@@ -45,87 +38,94 @@ def strip_commas(text: str) -> str:
     return text.replace(",", "")
 
 
-def build_category_table(conn: sqlite3.Connection, category: str) -> dict:
+def build_category_table(conn, category: str) -> dict:
     table = category
-    conn.execute(f"DROP TABLE IF EXISTS {q(table)}")
+    with conn.cursor() as cur:
+        cur.execute(f"DROP TABLE IF EXISTS {q(table)}")
 
-    labels = [
-        r[0]
-        for r in conn.execute(
-            "SELECT DISTINCT label FROM raw_attrs WHERE category = ? ORDER BY label", (category,)
+        cur.execute(
+            "SELECT DISTINCT label FROM raw_attrs WHERE category = %s ORDER BY label", (category,)
         )
-    ]
+        labels = [r[0] for r in cur.fetchall()]
 
-    col_defs = ["item_id INTEGER PRIMARY KEY", "name TEXT", "description TEXT"]
-    label_meta = {}
-    for label in labels:
-        rows = conn.execute(
-            "SELECT item_id, text, links_json FROM raw_attrs WHERE category = ? AND label = ?",
-            (category, label),
-        ).fetchall()
-        texts = [t for _, t, _ in rows if t]
-        all_int = bool(texts) and all(FULL_INT_RE.fullmatch(strip_commas(t.strip())) for t in texts)
-        link_counts = [len(json.loads(lj)) for _, _, lj in rows]
-        has_fk = any(c == 1 for c in link_counts) and all(c <= 1 for c in link_counts)
-
-        col_type = "INTEGER" if all_int else "TEXT"
-        col_defs.append(f"{q(label)} {col_type}")
-        if has_fk:
-            col_defs.append(f"{q(label + '_id')} INTEGER")
-            col_defs.append(f"{q(label + '_분류')} TEXT")
-        label_meta[label] = {"all_int": all_int, "has_fk": has_fk}
-
-    conn.execute(f"CREATE TABLE {q(table)} ({', '.join(col_defs)})")
-
-    item_rows = conn.execute(
-        "SELECT item_id, name, description FROM items_core WHERE category = ?", (category,)
-    ).fetchall()
-
-    attr_by_item: dict[int, dict[str, tuple]] = {}
-    for label in labels:
-        for item_id, text, links_json in conn.execute(
-            "SELECT item_id, text, links_json FROM raw_attrs WHERE category = ? AND label = ?",
-            (category, label),
-        ):
-            attr_by_item.setdefault(item_id, {})[label] = (text, json.loads(links_json))
-
-    col_names = ["item_id", "name", "description"] + [
-        c for label in labels for c in ([label, label + "_id", label + "_분류"] if label_meta[label]["has_fk"] else [label])
-    ]
-    placeholders = ",".join("?" * len(col_names))
-    insert_sql = f"INSERT INTO {q(table)} ({','.join(q(c) for c in col_names)}) VALUES ({placeholders})"
-
-    for item_id, name, description in item_rows:
-        values = [item_id, name, description]
-        attrs = attr_by_item.get(item_id, {})
+        col_defs = ["item_id INTEGER PRIMARY KEY", "name TEXT", "description TEXT"]
+        label_meta = {}
         for label in labels:
-            text, links = attrs.get(label, (None, []))
-            meta = label_meta[label]
-            if meta["all_int"] and text:
-                m = INT_RE.search(strip_commas(text))
-                values.append(int(m.group()) if m else None)
-            else:
-                values.append(text)
-            if meta["has_fk"]:
-                link = links[0] if links else None
-                values.append(link["item_id"] if link else None)
-                values.append(link["category"] if link else None)
-        conn.execute(insert_sql, values)
+            cur.execute(
+                "SELECT item_id, text, links_json FROM raw_attrs WHERE category = %s AND label = %s",
+                (category, label),
+            )
+            rows = cur.fetchall()
+            texts = [t for _, t, _ in rows if t]
+            all_int = bool(texts) and all(FULL_INT_RE.fullmatch(strip_commas(t.strip())) for t in texts)
+            link_counts = [len(json.loads(lj)) for _, _, lj in rows]
+            has_fk = any(c == 1 for c in link_counts) and all(c <= 1 for c in link_counts)
+
+            col_type = "INTEGER" if all_int else "TEXT"
+            col_defs.append(f"{q(label)} {col_type}")
+            if has_fk:
+                col_defs.append(f"{q(label + '_id')} INTEGER")
+                col_defs.append(f"{q(label + '_분류')} TEXT")
+            label_meta[label] = {"all_int": all_int, "has_fk": has_fk}
+
+        cur.execute(f"CREATE TABLE {q(table)} ({', '.join(col_defs)})")
+
+        cur.execute(
+            "SELECT item_id, name, description FROM items_core WHERE category = %s", (category,)
+        )
+        item_rows = cur.fetchall()
+
+        attr_by_item: dict[int, dict[str, tuple]] = {}
+        for label in labels:
+            cur.execute(
+                "SELECT item_id, text, links_json FROM raw_attrs WHERE category = %s AND label = %s",
+                (category, label),
+            )
+            for item_id, text, links_json in cur.fetchall():
+                attr_by_item.setdefault(item_id, {})[label] = (text, json.loads(links_json))
+
+        col_names = ["item_id", "name", "description"] + [
+            c for label in labels for c in ([label, label + "_id", label + "_분류"] if label_meta[label]["has_fk"] else [label])
+        ]
+        placeholders = ",".join(["%s"] * len(col_names))
+        insert_sql = f"INSERT INTO {q(table)} ({','.join(q(c) for c in col_names)}) VALUES ({placeholders})"
+
+        for item_id, name, description in item_rows:
+            values = [item_id, name, description]
+            attrs = attr_by_item.get(item_id, {})
+            for label in labels:
+                text, links = attrs.get(label, (None, []))
+                meta = label_meta[label]
+                if meta["all_int"]:
+                    # text가 빈 문자열/None이면 정수로 못 바꾸니 NULL로 넣는다 — SQLite는
+                    # INTEGER 컬럼에 빈 문자열을 그냥 TEXT로 관대하게 저장했지만(타입
+                    # 어필리니티), Postgres는 엄격한 타입이라 그러면 에러가 난다.
+                    m = INT_RE.search(strip_commas(text)) if text else None
+                    values.append(int(m.group()) if m else None)
+                else:
+                    values.append(text)
+                if meta["has_fk"]:
+                    link = links[0] if links else None
+                    values.append(link["item_id"] if link else None)
+                    values.append(link["category"] if link else None)
+            cur.execute(insert_sql, values)
 
     return {"labels": labels}
 
 
-def build_relation_tables(conn: sqlite3.Connection, category: str) -> dict:
+def build_relation_tables(conn, category: str) -> dict:
     stats = {}
     label_rows: dict[str, list] = {}
-    for item_id, label, headers_json, rows_json in conn.execute(
-        "SELECT item_id, label, headers_json, rows_json FROM raw_tables WHERE category = ?", (category,)
-    ):
-        headers = tuple(json.loads(headers_json))
-        if headers in COVERED_HEADER_SHAPES:
-            continue
-        rows = json.loads(rows_json)
-        label_rows.setdefault(label, []).append((item_id, headers, rows))
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT item_id, label, headers_json, rows_json FROM raw_tables WHERE category = %s", (category,)
+        )
+        for item_id, label, headers_json, rows_json in cur.fetchall():
+            headers = tuple(json.loads(headers_json))
+            if headers in COVERED_HEADER_SHAPES:
+                continue
+            rows = json.loads(rows_json)
+            label_rows.setdefault(label, []).append((item_id, headers, rows))
 
     for label, entries in label_rows.items():
         union_headers = []
@@ -154,63 +154,71 @@ def build_relation_tables(conn: sqlite3.Connection, category: str) -> dict:
         value_col = {h: (h + "_num" if header_all_int[h] else h + "_text") for h in union_headers}
 
         table = f"{category}__{label}"
-        conn.execute(f"DROP TABLE IF EXISTS {q(table)}")
-        col_defs = ["item_id INTEGER", "row_index INTEGER"]
-        for h in union_headers:
-            col_type = "INTEGER" if header_all_int[h] else "TEXT"
-            col_defs.append(f"{q(value_col[h])} {col_type}")
-            col_defs.append(f"{q(h + '_id')} INTEGER")
-            col_defs.append(f"{q(h + '_분류')} TEXT")
-        conn.execute(f"CREATE TABLE {q(table)} ({', '.join(col_defs)})")
+        with conn.cursor() as cur:
+            cur.execute(f"DROP TABLE IF EXISTS {q(table)}")
+            col_defs = ["item_id INTEGER", "row_index INTEGER"]
+            for h in union_headers:
+                col_type = "INTEGER" if header_all_int[h] else "TEXT"
+                col_defs.append(f"{q(value_col[h])} {col_type}")
+                col_defs.append(f"{q(h + '_id')} INTEGER")
+                col_defs.append(f"{q(h + '_분류')} TEXT")
+            cur.execute(f"CREATE TABLE {q(table)} ({', '.join(col_defs)})")
 
-        col_names = ["item_id", "row_index"] + [
-            c for h in union_headers for c in (value_col[h], h + "_id", h + "_분류")
-        ]
-        placeholders = ",".join("?" * len(col_names))
-        insert_sql = f"INSERT INTO {q(table)} ({','.join(q(c) for c in col_names)}) VALUES ({placeholders})"
+            col_names = ["item_id", "row_index"] + [
+                c for h in union_headers for c in (value_col[h], h + "_id", h + "_분류")
+            ]
+            placeholders = ",".join(["%s"] * len(col_names))
+            insert_sql = f"INSERT INTO {q(table)} ({','.join(q(c) for c in col_names)}) VALUES ({placeholders})"
 
-        n = 0
-        for item_id, headers, rows in entries:
-            for row_index, row in enumerate(rows):
-                if len(row) != len(headers):
-                    continue
-                cell_by_header = dict(zip(headers, row))
-                values = [item_id, row_index]
-                for h in union_headers:
-                    cell = cell_by_header.get(h)
-                    if cell is None:
-                        values.extend([None, None, None])
+            n = 0
+            for item_id, headers, rows in entries:
+                for row_index, row in enumerate(rows):
+                    if len(row) != len(headers):
                         continue
-                    link = cell["links"][0] if cell["links"] else None
-                    if header_all_int[h] and cell["text"]:
-                        m = INT_RE.search(strip_commas(cell["text"]))
-                        values.append(int(m.group()) if m else None)
-                    else:
-                        values.append(cell["text"])
-                    values.append(link["item_id"] if link else None)
-                    values.append(link["category"] if link else None)
-                conn.execute(insert_sql, values)
-                n += 1
+                    cell_by_header = dict(zip(headers, row))
+                    values = [item_id, row_index]
+                    for h in union_headers:
+                        cell = cell_by_header.get(h)
+                        if cell is None:
+                            values.extend([None, None, None])
+                            continue
+                        link = cell["links"][0] if cell["links"] else None
+                        if header_all_int[h]:
+                            # 빈 문자열은 NULL로 — Postgres INTEGER 컬럼은 SQLite와 달리
+                            # 빈 문자열을 관대하게 받아주지 않는다.
+                            m = INT_RE.search(strip_commas(cell["text"])) if cell["text"] else None
+                            values.append(int(m.group()) if m else None)
+                        else:
+                            values.append(cell["text"])
+                        values.append(link["item_id"] if link else None)
+                        values.append(link["category"] if link else None)
+                    cur.execute(insert_sql, values)
+                    n += 1
         stats[label] = n
 
     return stats
 
 
 def materialize() -> None:
-    conn = sqlite3.connect(STRUCT_DB)
-    categories = [
-        r[0]
-        for r in conn.execute("SELECT DISTINCT category FROM items_core ORDER BY category")
-        if r[0] not in ALREADY_HANDCRAFTED
-    ]
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT category FROM items_core ORDER BY category")
+        categories = [r[0] for r in cur.fetchall() if r[0] not in ALREADY_HANDCRAFTED]
     print(f"[generic] 대상 카테고리: {len(categories)}개")
 
-    for category in categories:
-        meta = build_category_table(conn, category)
-        rel_stats = build_relation_tables(conn, category)
-        n = conn.execute(f"SELECT COUNT(*) FROM {q(category)}").fetchone()[0]
-        conn.commit()
-        print(f"  {category}: {n}건, 속성 {len(meta['labels'])}개, 관계표 {rel_stats}")
+    # 카테고리 66개 전체에 걸쳐 개별 INSERT가 수만 번 실행되므로(예: sellerNpc 관계표
+    # 13,852건), 매번 네트워크 왕복하는 대신 pipeline 모드로 묶어서 보낸다
+    # (build_acquisition.py와 동일한 이유 — SQLite 대비 psycopg 개별 execute가 훨씬 느림).
+    with ExitStack() as stack:
+        stack.enter_context(conn.pipeline())
+        for category in categories:
+            meta = build_category_table(conn, category)
+            rel_stats = build_relation_tables(conn, category)
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) FROM {q(category)}")
+                n = cur.fetchone()[0]
+            conn.commit()
+            print(f"  {category}: {n}건, 속성 {len(meta['labels'])}개, 관계표 {rel_stats}")
 
     conn.close()
     print("[generic] 완료")

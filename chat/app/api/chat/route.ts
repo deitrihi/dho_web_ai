@@ -10,18 +10,24 @@ import {
   listCategories,
   runSql,
   searchItems,
+  semanticSearchItems,
 } from "@/lib/dho-db";
 import { logError } from "@/lib/error-log";
 
-export const runtime = "nodejs"; // lib/dho-db.ts가 node:sqlite를 쓰므로 Edge 런타임 불가
+export const runtime = "nodejs"; // lib/dho-db.ts가 pg(TCP 소켓)를 쓰므로 Edge 런타임 불가
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT = `당신은 대항해시대 온라인 DB 아카이브(dho_structured.sqlite3)를 자연어 질문에
+const SYSTEM_PROMPT = `당신은 대항해시대 온라인 DB 아카이브(PostgreSQL)를 자연어 질문에
 맞춰 탐색·조회하는 어시스턴트입니다.
 
 질문에 아이템/직업/스킬 등 고유명사가 있으면 get_item_detail로 이름 하나로 상세정보를 한 번에
 조회하세요. 그걸로 부족하면(관련 하위 테이블 조회, 조건별 집계 등) list_categories -> find_tables
 -> get_table_schema -> run_sql 순서로 세부 조회하세요.
+
+정확한 이름을 모르거나 "~용도로 쓰는 아이템", "~한 효과를 가진 스킬"처럼 개념/느낌으로 찾는
+질문에는 semantic_search_items를 쓰세요. search_items/get_item_detail은 이름이 정확히
+포함되어야 찾지만, semantic_search_items는 의미가 비슷한 항목을 찾아줍니다. 반환된
+similarity(0~1, 높을수록 유사)가 낮은 항목은 관련 없을 수 있으니 걸러서 판단하세요.
 
 get_item_detail 결과의 "획득_방법" 필드에는 판매 NPC/퀘스트/해상 NPC/레시피/변성연금 등 공유
 테이블에서 찾은 이 아이템의 실제 획득 경로가 전부 들어있습니다 — "이 아이템 어디서 구하나"
@@ -112,6 +118,17 @@ async function handleChat(req: Request): Promise<Response> {
         }),
         execute: async ({ keyword }) => searchItems(keyword),
       }),
+      semantic_search_items: tool({
+        description:
+          "자연어 설명/개념으로 의미가 비슷한 아이템을 벡터 검색으로 찾는다. 정확한 이름을 " +
+          "모를 때, 또는 '~용도의 아이템'/'~한 효과' 처럼 느낌으로 찾을 때 search_items 대신 " +
+          "이 도구를 쓴다. 결과의 similarity가 낮으면(대략 0.3 미만) 관련 없는 항목일 수 있다.",
+        inputSchema: z.object({
+          text: z.string().describe("찾고 싶은 대상을 설명하는 자연어 문장/구절"),
+          limit: z.number().int().min(1).max(30).optional().describe("반환할 최대 개수 (기본 10)"),
+        }),
+        execute: async ({ text, limit }) => semanticSearchItems(text, limit),
+      }),
       find_tables: tool({
         description:
           "테이블 이름에 keyword가 포함된 테이블 목록을 반환한다(대소문자 무시). " +
@@ -133,7 +150,7 @@ async function handleChat(req: Request): Promise<Response> {
       }),
       run_sql: tool({
         description:
-          "SELECT 쿼리를 dho_structured.sqlite3에 실행하고 결과를 반환한다. SELECT 문만 " +
+          "SELECT 쿼리를 PostgreSQL DB에 실행하고 결과를 반환한다. SELECT 문만 " +
           "허용되며 결과는 최대 200개까지만 반환된다. get_table_schema로 정확한 컬럼명을 " +
           "확인한 뒤에 호출할 것.",
         inputSchema: z.object({

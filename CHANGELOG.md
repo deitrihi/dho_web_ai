@@ -2,6 +2,68 @@
 
 ## [미커밋]
 
+- Dockerfile — `build_search_index.py`가 `COPY` 목록에서 빠져 있던 문제 수정. NAS의
+  `DERIVED_PIPELINE_SCRIPTS`(항목 저장 시마다 재실행)가 이 스크립트 없이 매번 실패하며
+  `items_fts`가 갱신 안 되고 있었을 가능성 — `DERIVED_PIPELINE_SCRIPTS` 8개 스크립트
+  전부와 `COPY` 목록을 대조해 누락 없음 확인.
+- 노션 동기화 기능(`sync_notion.py`, `sync_notion_loop.sh`, `Dockerfile.notion-sync`,
+  `chat`의 `searchNotion`/`search_notion` 도구) 전체 제거 — Postgres 통합 이후 어차피
+  SQLite 파일을 안 봐서 유지 불가능해지는데다, Wiki.js가 생기면 개인 문서를 거기 직접
+  쓰면 되어 불필요해짐(사용자 확인).
+- **SQLite → PostgreSQL 서빙 DB 전환 + NAS 배포 (Phase 1 완료)**: `dho_structured.sqlite3`를
+  읽던 webapp/chat이 이제 PostgreSQL(`DATABASE_URL`) 하나만 본다. `build_structured_db.py`/
+  `build_category_localization.py`(재크롤링 시에만 도는 드문 작업)만 SQLite에 남고, 나머지는
+  전부 Postgres 대상으로 전환.
+  - docker-compose.yml — `postgres`(`pgvector/pgvector:pg16`) 서비스 신규 추가(볼륨
+    `postgres_data`, `postgres/init.sql`로 vector/pg_trgm 확장 자동 생성, 호스트 포트
+    5434 — NAS(UGREEN OS)가 5432/5433에 이미 네이티브 PostgreSQL을 쓰고 있어서 충돌 회피),
+    `notion-sync` 서비스 제거, webapp/chat이 SQLite 파일 마운트 대신 `postgres` 서비스에
+    `depends_on: condition: service_healthy`로 접속.
+  - migrate_to_postgres.py — 신규: `items_core`/`raw_attrs`/`raw_tables`/
+    `category_localization` 4개 "원본성" 테이블을 SQLite→Postgres로 COPY 프로토콜 이관.
+  - pg_conn.py — 신규: 파생 테이블 스크립트 공용 Postgres 접속 헬퍼.
+  - build_backlinks.py/build_acquisition.py/materialize_*.py(5개)/build_search_index.py —
+    psycopg 기반으로 재작성(`DATABASE_URL` 접속, `?`→`%s`). `build_search_index.py`는
+    SQLite FTS5(trigram) 대신 `pg_trgm` GIN 인덱스 기반 `items_search` 테이블로 교체.
+    `build_acquisition.py`/`materialize_generic.py`는 개별 INSERT가 수만 건이라 psycopg
+    pipeline 모드 적용(120초 타임아웃 → 각각 19.8초/43초). 마이그레이션 중 Postgres의
+    엄격한 타입 검사로 드러난 버그 2건 수정(INTEGER 컬럼에 빈 문자열 삽입 시도, SQLite가
+    관대하게 봐주던 큰따옴표 문자열 리터럴).
+  - dho_webapp.py — sqlite3 → psycopg(`dict_row`)로 재작성. `rebuild_derived_tables()`가
+    자식 프로세스에 넘기는 env를 `DHO_DB_PATH`→`DATABASE_URL`로 전환. `get_nav_groups()`의
+    GROUP BY에 non-aggregate 컬럼 추가(Postgres 요구사항).
+  - chat/lib/dho-db.ts — `node:sqlite` → `pg`(node-postgres, Pool)로 재작성.
+    `sqlite_master`/`PRAGMA table_info` → `information_schema`, FTS5 bm25 →
+    `pg_trgm word_similarity()`, `runSql`의 서브쿼리에 별칭 추가(Postgres 필수), bigint
+    컬럼이 문자열로 오는 pg 기본 동작을 전역 타입 파서로 숫자 변환.
+  - .env, .env.example — `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` 추가,
+    `NOTION_API_KEY`/`NOTION_ROOT_PAGE` 제거.
+  - deploy.sh, README.md — notion-sync 관련 안내 전부 제거, Postgres 기준으로 갱신.
+  - 로컬 Docker로 전체 파이프라인 실행(items_core 33,496/raw_attrs 149,381/
+    item_backlinks 440,926건 등 원본과 일치 확인) + webapp/chat 스모크 테스트 + 실제
+    챗봇 질문("가나돌 사령부가 뭐야?") end-to-end 검증 완료.
+  - **NAS 실배포 완료**: `./deploy.sh`로 postgres+webapp+chat 기동, 기존
+    `dho-notion-sync` 컨테이너 제거, `migrate_to_postgres.py` + 파생 테이블 8개 스크립트
+    NAS Postgres 대상 실행, 최종 행 수 로컬과 일치 확인, webapp/chat/nginx-proxy 경유
+    HTTPS까지 정상 동작 확인.
+- **pgvector 아이템 시맨틱 검색 (Phase 2 완료)**: chat이 이제 정확한 이름 없이 개념/느낌으로도
+  아이템을 찾을 수 있음.
+  - build_embeddings.py — 신규: `items_search.search_text`를 OpenAI 임베딩 API
+    (`text-embedding-3-small`, 1536차원)로 100건씩 배치 임베딩해서 `item_embeddings`
+    테이블(HNSW 코사인 인덱스)에 저장. `requests` 직접 호출(sync_notion.py와 동일 컨벤션,
+    `openai` 패키지 의존성 추가 안 함). `DERIVED_PIPELINE_SCRIPTS`(저장마다 자동 재실행)엔
+    포함 안 함 — API 비용/시간 때문에 수동 실행 대상.
+  - chat/lib/dho-db.ts — `semanticSearchItems()` 추가(ai-sdk `embed()` +
+    `openai.textEmbeddingModel()`), pgvector 코사인 거리(`<=>`)로 검색.
+  - chat/app/api/chat/route.ts — `semantic_search_items` 도구 등록 + SYSTEM_PROMPT에
+    사용 시점(정확한 이름을 모르거나 개념으로 찾을 때) 안내.
+  - requirements.txt/Dockerfile — `requests` 추가, `build_embeddings.py` 이미지에 포함.
+  - .env/.env.example — `OPENAI_EMBEDDING_MODEL` 추가.
+  - 로컬 33,496건 + NAS 33,496건 전체 임베딩 생성 완료(각 약 20~40분, API 비용 미미).
+    품질 검증: 정답을 아는 항목을 다른 표현으로 질의했을 때 정답이 유사도 1위로 정확히
+    나옴을 확인.
+- NEXT_STEPS.md — Phase 1/2 완료 반영, Phase 3(Wiki.js)를 다음 세션에서 이어갈 항목으로 추가.
+
 ## 2026-08-05 | f0a1f8c
 
 - build_search_index.py — 신규: `items_core`(name/title/description) +

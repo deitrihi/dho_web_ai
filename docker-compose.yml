@@ -1,22 +1,48 @@
 # DHO 로컬 아카이브 NAS 배포 스택.
-# - webapp: dho_webapp.py 조회/편집용 Flask 웹앱 (gunicorn). dho_structured.sqlite3를
-#   읽기-쓰기로 단일 파일 마운트한다 (항목 추가/수정 기능이 DB에 직접 씀).
-# - chat: OpenWebUI를 대체한 Vercel AI SDK 기반 Text-to-SQL 챗봇 프론트(chat/). DB는
-#   읽기 전용으로 dbsql 프로젝트 폴더를 통째로 마운트한다.
-#   API 키/URL은 .env 파일(OPENAI_* 변수, git에는 커밋하지 말 것)에서 읽어온다.
-#   서버 에러는 named volume(chat_logs)에 JSONL로 기록되고 /chat/logs 페이지에서 조회 가능
-#   (컨테이너 재시작/재배포에도 유지됨).
+# - postgres: 구조화 데이터(원래 dho_structured.sqlite3) + pgvector 임베딩을 담는 서빙 DB.
+#   webapp/chat 둘 다 이 하나의 DB만 바라본다. pgvector/pg_trgm 확장은 ./postgres/init.sql이
+#   최초 기동 시 자동 생성한다.
+# - webapp: dho_webapp.py 조회/편집용 Flask 웹앱 (gunicorn). 항목 저장 시 파생 테이블
+#   재생성 스크립트를 서브프로세스로 실행하므로 postgres에 쓰기 권한이 필요하다.
+# - chat: Vercel AI SDK 기반 Text-to-SQL + 시맨틱 검색 챗봇 프론트(chat/). postgres를
+#   읽기 전용으로 조회한다. API 키/URL은 .env 파일(OPENAI_* 변수, git에는 커밋하지 말 것)에서
+#   읽어온다. 서버 에러는 named volume(chat_logs)에 JSONL로 기록되고 /chat/logs 페이지에서
+#   조회 가능(컨테이너 재시작/재배포에도 유지됨).
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dho-postgres
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   webapp:
     build: .
     container_name: dho-webapp
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "5050:5050"
-    volumes:
-      - ./dho_structured.sqlite3:/app/dho_structured.sqlite3
     environment:
-      - DHO_DB_PATH=/app/dho_structured.sqlite3
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    env_file:
+      - .env
 
   chat:
     build:
@@ -25,19 +51,22 @@ services:
         NEXT_BASE_PATH: /chat
     container_name: dho-chat
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "3000:3000"
     volumes:
-      - ./:/data/dbsql:ro
       - chat_logs:/data/logs
     environment:
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL}
-      - DHO_DB_PATH=/data/dbsql/dho_structured.sqlite3
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - DHO_CHAT_LOG_PATH=/data/logs/errors.jsonl
     env_file:
       - .env
 
 volumes:
   chat_logs:
+  postgres_data:

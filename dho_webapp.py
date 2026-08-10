@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-dho_structured.sqlite3 데이터를 원본 사이트와 동일한 정보 구조로 보여주는 조회용 웹앱
+PostgreSQL(구조화 데이터가 이관된 서빙 DB)에 담긴 데이터를 원본 사이트와 동일한 정보
+구조로 보여주는 조회용 웹앱
 
 범위: 카테고리 목록 -> 카테고리별 항목 목록 -> 항목 상세(속성 + 표) 3단 구조.
 items_core/raw_attrs/raw_tables는 원본 페이지를 1:1로 그대로 옮겨온 것이라
@@ -9,15 +10,17 @@ items_core/raw_attrs/raw_tables는 원본 페이지를 1:1로 그대로 옮겨�
 
 사용법
 ------
-    python dho_webapp.py                # http://localhost:5050 에서 실행
+    python dho_webapp.py                # http://localhost:5050 에서 실행 (DATABASE_URL 필요)
 """
+import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
 from flask import Flask, g, render_template, request, abort, url_for, redirect
 from markupsafe import Markup, escape
 
@@ -27,8 +30,8 @@ _NUMERIC_RE = re.compile(r"^-?[\d,]+$")
 def _q(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
-# DHO_DB_PATH로 오버라이드 가능 (Docker에서 DB 파일을 볼륨 마운트할 때 사용, chat/과 동일한 관례)
-DB_PATH = Path(os.environ.get("DHO_DB_PATH", str(Path(__file__).parent / "dho_structured.sqlite3")))
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 PER_PAGE = 100
 
 # chat/ 챗봇의 실제 접속 주소. 외부에서는 도메인 443 하나로만 들어오고, nginx가 그 안에서
@@ -82,10 +85,9 @@ def render_text_with_links(text: str | None, links: list[dict]) -> Markup:
 app.jinja_env.filters["with_links"] = render_text_with_links
 
 
-def get_db() -> sqlite3.Connection:
+def get_db() -> psycopg.Connection:
     if "db" not in g:
-        g.db = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        g.db.row_factory = sqlite3.Row
+        g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return g.db
 
 
@@ -96,11 +98,10 @@ def close_db(exception=None):
         db.close()
 
 
-def get_write_db() -> sqlite3.Connection:
-    """조회용 get_db()와 별개로, 쓰기가 필요한 요청(새 항목/수정)에서만 연다."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_write_db() -> psycopg.Connection:
+    """조회용 get_db()와 별개로, 쓰기가 필요한 요청(새 항목/수정)에서만 연다.
+    next_item_id()가 결과를 위치 인덱스(row[0])로 읽으므로 dict_row를 안 쓴다."""
+    return psycopg.connect(DATABASE_URL)
 
 
 # item_backlinks/item_acquisition_*/item_transmutation_*/item_detail_list/카테고리 전용
@@ -129,7 +130,8 @@ def rebuild_derived_tables() -> list[str]:
     # PYTHONUTF8=1: 자식 스크립트의 한글 print() 출력이 콘솔 코드페이지(Windows에서는 cp949 등)
     # 대신 항상 UTF-8로 나가게 강제 — 안 하면 부모가 UTF-8로 디코드할 때 깨진 바이트로
     # UnicodeDecodeError가 남(플랫폼별 로케일에 따라 달라지는 문제라 명시적으로 고정해야 함).
-    env = {**os.environ, "DHO_DB_PATH": str(DB_PATH), "PYTHONUTF8": "1"}
+    # DATABASE_URL은 이미 os.environ에 있으므로 별도로 주입할 필요 없다.
+    env = {**os.environ, "PYTHONUTF8": "1"}
     for script in DERIVED_PIPELINE_SCRIPTS:
         try:
             result = subprocess.run(
@@ -152,9 +154,9 @@ NEW_ITEM_ID_BASE = 900_000_000  # 나중에 원본 사이트를 재크롤링해�
 # 사용자가 직접 추가한 항목은 이 범위부터 순번을 매긴다 (원본 item_id는 대체로 수백만 이하)
 
 
-def next_item_id(db: sqlite3.Connection, category: str) -> int:
+def next_item_id(db: psycopg.Connection, category: str) -> int:
     row = db.execute(
-        "SELECT MAX(item_id) FROM items_core WHERE category = ? AND item_id >= ?",
+        "SELECT MAX(item_id) FROM items_core WHERE category = %s AND item_id >= %s",
         (category, NEW_ITEM_ID_BASE),
     ).fetchone()
     return (row[0] or NEW_ITEM_ID_BASE - 1) + 1
@@ -194,7 +196,7 @@ def _parse_tables_form(form) -> list[dict]:
 
 
 def _save_item(
-    db: sqlite3.Connection,
+    db: psycopg.Connection,
     category: str,
     item_id: int,
     name: str,
@@ -203,27 +205,25 @@ def _save_item(
     attrs: list[dict],
     tables: list[dict],
 ) -> None:
-    import json
-
     db.execute(
         "INSERT INTO items_core (category, item_id, name, title, description, url) "
-        "VALUES (?, ?, ?, ?, ?, NULL) "
-        "ON CONFLICT(category, item_id) DO UPDATE SET "
+        "VALUES (%s, %s, %s, %s, %s, NULL) "
+        "ON CONFLICT (category, item_id) DO UPDATE SET "
         "name=excluded.name, title=excluded.title, description=excluded.description",
         (category, item_id, name, title, description),
     )
-    db.execute("DELETE FROM raw_attrs WHERE category = ? AND item_id = ?", (category, item_id))
-    db.execute("DELETE FROM raw_tables WHERE category = ? AND item_id = ?", (category, item_id))
+    db.execute("DELETE FROM raw_attrs WHERE category = %s AND item_id = %s", (category, item_id))
+    db.execute("DELETE FROM raw_tables WHERE category = %s AND item_id = %s", (category, item_id))
     for attr in attrs:
         db.execute(
             "INSERT INTO raw_attrs (category, item_id, label, text, links_json, images_json, position) "
-            "VALUES (?, ?, ?, ?, '[]', '[]', ?)",
+            "VALUES (%s, %s, %s, %s, '[]', '[]', %s)",
             (category, item_id, attr["label"], attr["text"], attr["position"]),
         )
     for table in tables:
         db.execute(
             "INSERT INTO raw_tables (category, item_id, label, headers_json, rows_json, position) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s)",
             (
                 category,
                 item_id,
@@ -236,28 +236,28 @@ def _save_item(
     db.commit()
 
 
-def get_category_label(db: sqlite3.Connection, slug: str) -> str:
+def get_category_label(db: psycopg.Connection, slug: str) -> str:
     row = db.execute(
-        "SELECT label_ko FROM category_localization WHERE slug = ?", (slug,)
+        "SELECT label_ko FROM category_localization WHERE slug = %s", (slug,)
     ).fetchone()
     return row["label_ko"] if row else slug
 
 
-def get_group_title(db: sqlite3.Connection, slug: str) -> str | None:
+def get_group_title(db: psycopg.Connection, slug: str) -> str | None:
     row = db.execute(
-        "SELECT group_title_ko FROM category_localization WHERE slug = ?", (slug,)
+        "SELECT group_title_ko FROM category_localization WHERE slug = %s", (slug,)
     ).fetchone()
     return row["group_title_ko"] if row else None
 
 
-def get_nav_groups(db: sqlite3.Connection) -> list[dict]:
+def get_nav_groups(db: psycopg.Connection) -> list[dict]:
     rows = db.execute(
         """
         SELECT ic.category AS slug, COUNT(*) AS cnt,
                cl.label_ko, cl.group_title_ko, cl.group_order, cl.order_in_group
         FROM items_core ic
         LEFT JOIN category_localization cl ON cl.slug = ic.category
-        GROUP BY ic.category
+        GROUP BY ic.category, cl.label_ko, cl.group_title_ko, cl.group_order, cl.order_in_group
         ORDER BY COALESCE(cl.group_order, 999), COALESCE(cl.order_in_group, 999), ic.category
         """
     ).fetchall()
@@ -304,10 +304,10 @@ LIST_MAX_AVG_LEN = 20  # 이보다 평균 글자 수가 긴 속성(예: 퀘스�
 # 고르는 대신 "짧고 분류값스러운 속성일수록 목록에 어울린다"는 휴리스틱으로 자동 선정
 
 
-def get_list_columns(db: sqlite3.Connection, category: str) -> list[dict]:
+def get_list_columns(db: psycopg.Connection, category: str) -> list[dict]:
     rows = db.execute(
         "SELECT label, AVG(LENGTH(text)) AS avg_len, MIN(position) AS pos "
-        "FROM raw_attrs WHERE category = ? AND text IS NOT NULL AND text != '' AND label != '이미지' "
+        "FROM raw_attrs WHERE category = %s AND text IS NOT NULL AND text != '' AND label != '이미지' "
         "GROUP BY label ORDER BY pos, label",
         (category,),
     ).fetchall()
@@ -317,9 +317,9 @@ def get_list_columns(db: sqlite3.Connection, category: str) -> list[dict]:
         if r["avg_len"] is None or r["avg_len"] > LIST_MAX_AVG_LEN:
             continue
         texts = [
-            t[0]
+            t["text"]
             for t in db.execute(
-                "SELECT DISTINCT text FROM raw_attrs WHERE category = ? AND label = ? "
+                "SELECT DISTINCT text FROM raw_attrs WHERE category = %s AND label = %s "
                 "AND text IS NOT NULL AND text != ''",
                 (category, r["label"]),
             ).fetchall()
@@ -335,8 +335,8 @@ def get_list_columns(db: sqlite3.Connection, category: str) -> list[dict]:
 def category_list(category):
     db = get_db()
     total = db.execute(
-        "SELECT COUNT(*) FROM items_core WHERE category = ?", (category,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS total FROM items_core WHERE category = %s", (category,)
+    ).fetchone()["total"]
     if total == 0:
         abort(404)
 
@@ -353,24 +353,24 @@ def category_list(category):
 
     if columns:
         pivot_sql = ", ".join(
-            f"MAX(CASE WHEN ra.label = ? THEN ra.text END) AS {_q(c['label'])}" for c in columns
+            f"MAX(CASE WHEN ra.label = %s THEN ra.text END) AS {_q(c['label'])}" for c in columns
         )
         order_col = "ic.item_id" if sort == "item_id" else "ic.name" if sort == "name" else _q(sort)
         numeric_col = next((c for c in columns if c["label"] == sort and c["numeric"]), None)
         if numeric_col:
-            order_col = f'CAST(REPLACE({_q(sort)}, ",", "") AS INTEGER)'
+            order_col = f"CAST(REPLACE({_q(sort)}, ',', '') AS INTEGER)"
         sql = (
             f"SELECT ic.item_id, ic.name, ic.title, {pivot_sql} FROM items_core ic "
             "LEFT JOIN raw_attrs ra ON ra.category = ic.category AND ra.item_id = ic.item_id "
-            "WHERE ic.category = ? GROUP BY ic.item_id, ic.name, ic.title "
-            f"ORDER BY {order_col} {direction.upper()}, ic.item_id ASC LIMIT ? OFFSET ?"
+            "WHERE ic.category = %s GROUP BY ic.item_id, ic.name, ic.title "
+            f"ORDER BY {order_col} {direction.upper()}, ic.item_id ASC LIMIT %s OFFSET %s"
         )
         params = col_labels + [category, PER_PAGE, offset]
     else:
         order_col = "name" if sort == "name" else "item_id"
         sql = (
-            "SELECT item_id, name, title FROM items_core WHERE category = ? "
-            f"ORDER BY {order_col} {direction.upper()} LIMIT ? OFFSET ?"
+            "SELECT item_id, name, title FROM items_core WHERE category = %s "
+            f"ORDER BY {order_col} {direction.upper()} LIMIT %s OFFSET %s"
         )
         params = [category, PER_PAGE, offset]
 
@@ -392,21 +392,19 @@ def category_list(category):
 
 
 def _parse_links(links_json: str | None) -> list[dict]:
-    import json
-
     return json.loads(links_json) if links_json else []
 
 
 BACKLINKS_PER_CATEGORY = 30
 
 
-def get_backlinks(db: sqlite3.Connection, category: str, item_id: int) -> dict:
+def get_backlinks(db: psycopg.Connection, category: str, item_id: int) -> dict:
     """이 항목을 참조하는 다른 항목들을 소스 카테고리별로 묶어서 반환한다.
     일부 항목(흔한 스킬/재료 등)은 backlink가 수천 건이라 카테고리당
     BACKLINKS_PER_CATEGORY개까지만 보여주고 나머지는 개수만 표시한다."""
     counts = db.execute(
         "SELECT source_category, COUNT(*) AS cnt FROM item_backlinks "
-        "WHERE target_category = ? AND target_item_id = ? "
+        "WHERE target_category = %s AND target_item_id = %s "
         "GROUP BY source_category ORDER BY cnt DESC",
         (category, item_id),
     ).fetchall()
@@ -422,8 +420,8 @@ def get_backlinks(db: sqlite3.Connection, category: str, item_id: int) -> dict:
         items = db.execute(
             "SELECT b.source_item_id, ic.name, ic.title, b.source_label FROM item_backlinks b "
             "JOIN items_core ic ON ic.category = b.source_category AND ic.item_id = b.source_item_id "
-            "WHERE b.target_category = ? AND b.target_item_id = ? AND b.source_category = ? "
-            "ORDER BY b.source_item_id LIMIT ?",
+            "WHERE b.target_category = %s AND b.target_item_id = %s AND b.source_category = %s "
+            "ORDER BY b.source_item_id LIMIT %s",
             (category, item_id, src_cat, BACKLINKS_PER_CATEGORY),
         ).fetchall()
         groups.append(
@@ -450,12 +448,10 @@ def get_backlinks(db: sqlite3.Connection, category: str, item_id: int) -> dict:
 
 @app.route("/<category>/<int:item_id>")
 def item_detail(category, item_id):
-    import json
-
     db = get_db()
     item = db.execute(
         "SELECT category, item_id, name, title, description FROM items_core "
-        "WHERE category = ? AND item_id = ?",
+        "WHERE category = %s AND item_id = %s",
         (category, item_id),
     ).fetchone()
     if item is None:
@@ -468,7 +464,7 @@ def item_detail(category, item_id):
 
     for row in db.execute(
         "SELECT label, text, links_json, images_json, position FROM raw_attrs "
-        "WHERE category = ? AND item_id = ? ORDER BY position, rowid",
+        "WHERE category = %s AND item_id = %s ORDER BY position, insert_seq",
         (category, item_id),
     ):
         rows.append(
@@ -484,7 +480,7 @@ def item_detail(category, item_id):
 
     table_rows = db.execute(
         "SELECT label, headers_json, rows_json, position FROM raw_tables "
-        "WHERE category = ? AND item_id = ? ORDER BY position, rowid",
+        "WHERE category = %s AND item_id = %s ORDER BY position, insert_seq",
         (category, item_id),
     ).fetchall()
 
@@ -524,7 +520,7 @@ def item_detail(category, item_id):
 @app.route("/<category>/new", methods=["GET", "POST"])
 def item_new(category):
     db = get_db()
-    if not db.execute("SELECT 1 FROM items_core WHERE category = ? LIMIT 1", (category,)).fetchone():
+    if not db.execute("SELECT 1 FROM items_core WHERE category = %s LIMIT 1", (category,)).fetchone():
         abort(404)
 
     if request.method == "POST":
@@ -561,12 +557,10 @@ def item_new(category):
 
 @app.route("/<category>/<int:item_id>/edit", methods=["GET", "POST"])
 def item_edit(category, item_id):
-    import json
-
     db = get_db()
     item = db.execute(
         "SELECT category, item_id, name, title, description FROM items_core "
-        "WHERE category = ? AND item_id = ?",
+        "WHERE category = %s AND item_id = %s",
         (category, item_id),
     ).fetchone()
     if item is None:
@@ -594,14 +588,14 @@ def item_edit(category, item_id):
     attrs = [
         {"label": r["label"], "text": r["text"] or ""}
         for r in db.execute(
-            "SELECT label, text FROM raw_attrs WHERE category = ? AND item_id = ? ORDER BY position, rowid",
+            "SELECT label, text FROM raw_attrs WHERE category = %s AND item_id = %s ORDER BY position, insert_seq",
             (category, item_id),
         )
     ]
     tables = []
     for r in db.execute(
-        "SELECT label, headers_json, rows_json FROM raw_tables WHERE category = ? AND item_id = ? "
-        "ORDER BY position, rowid",
+        "SELECT label, headers_json, rows_json FROM raw_tables WHERE category = %s AND item_id = %s "
+        "ORDER BY position, insert_seq",
         (category, item_id),
     ):
         headers = json.loads(r["headers_json"])

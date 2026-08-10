@@ -1,49 +1,64 @@
-// dho_structured.sqlite3를 읽기 전용으로 조회하는 Text-to-SQL 도구 함수 모음
-// (openwebui_tool_dho_sql.py의 6개 함수를 TypeScript로 그대로 포팅)
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+// PostgreSQL(구조화 데이터가 이관된 서빙 DB)을 조회하는 Text-to-SQL 도구 함수 모음
+// (openwebui_tool_dho_sql.py의 6개 함수를 TypeScript로 그대로 포팅, 이후 Postgres로 전환)
+import { createOpenAI } from "@ai-sdk/openai";
+import { embed } from "ai";
+import { Pool, types, type QueryResultRow } from "pg";
 
-const DB_PATH =
-  process.env.DHO_DB_PATH ?? path.join(process.cwd(), "..", "dho_structured.sqlite3");
+const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small";
+
+// pg는 bigint(int8, COUNT/SUM 등의 기본 반환 타입)를 오버플로 방지 차원에서 기본적으로
+// 문자열로 반환한다. run_sql이 임의의 집계 쿼리를 실행할 수 있는데, 문자열로 오면
+// formatRow()의 콤마 포맷팅이 안 먹고 LLM의 숫자 연산도 꼬일 수 있다. 이 프로젝트의 값
+// 범위(아이템 수/수량 등)는 Number.MAX_SAFE_INTEGER를 넘을 일이 없으므로 전역으로 숫자
+// 변환하도록 오버라이드한다.
+types.setTypeParser(20 /* int8 */, (val) => parseInt(val, 10));
+
 const MAX_ROWS = Number(process.env.DHO_MAX_ROWS ?? 200);
 // get_backlinks 전용: qty로 재정렬하기 전에 넉넉히 가져올 상한 / 정렬 후 최종 반환 상한
 // (흔한 재료는 backlink가 수천 건까지 있어 무제한으로 가져오면 응답이 지나치게 커짐).
 const RAW_ENTRY_FETCH_CAP = 500;
 const ENTRY_OUTPUT_CAP = 50;
 
-function connect(): DatabaseSync {
-  return new DatabaseSync(DB_PATH, { readOnly: true, open: true });
+let pool: Pool | undefined;
+function getPool(): Pool {
+  if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  return pool;
 }
 
-// items_fts(FTS5, trigram 토크나이저)로 name/title/description/raw_attrs 속성값까지
-// 부분일치 검색한다. trigram은 3글자 미만은 인덱싱하지 않으므로(SQLite 제약) 그보다
-// 짧은 키워드는 기존 LIKE 방식으로 폴백한다.
+async function query<T extends QueryResultRow = QueryResultRow>(
+  sql: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const result = await getPool().query<T>(sql, params);
+  return result.rows;
+}
+
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+// items_search(pg_trgm GIN 인덱스)로 name/title/description/raw_attrs 속성값까지
+// 부분일치 검색한다. 트라이그램은 짧은 키워드일수록 정확도가 떨어지므로 3글자 미만은
+// 기존과 동일하게 LIKE 방식으로 폴백한다.
 const FTS_MIN_LENGTH = 3;
-
-// MATCH에 넘기는 키워드를 큰따옴표로 감싸 "구문(phrase)" 검색으로 강제한다 — 안 그러면
-// 공백이 AND로 쪼개지거나(예: "조합 등록" -> 조합 AND 등록) AND/OR 같은 FTS5 예약어가
-// 든 키워드가 검색 문법으로 해석돼버린다.
-function ftsPhrase(keyword: string): string {
-  return `"${keyword.replace(/"/g, '""')}"`;
-}
 
 type ItemMatch = { category: string; item_id: number; name: string | null; title: string | null };
 
-function findMatchingItems(db: DatabaseSync, keyword: string, limit: number): ItemMatch[] {
+async function findMatchingItems(keyword: string, limit: number): Promise<ItemMatch[]> {
   if ([...keyword].length >= FTS_MIN_LENGTH) {
-    return db
-      .prepare(
-        `SELECT category, item_id, name, title FROM items_fts ` +
-          `WHERE items_fts MATCH ? ORDER BY bm25(items_fts) LIMIT ${limit}`
-      )
-      .all(ftsPhrase(keyword)) as ItemMatch[];
+    return query<ItemMatch>(
+      `SELECT category, item_id, name, title FROM items_search
+       WHERE search_text ILIKE $1
+       ORDER BY word_similarity($2, search_text) DESC
+       LIMIT $3`,
+      [`%${keyword}%`, keyword, limit]
+    );
   }
-  return db
-    .prepare(
-      `SELECT category, item_id, name, title FROM items_core ` +
-        `WHERE name LIKE ? OR title LIKE ? LIMIT ${limit}`
-    )
-    .all(`%${keyword}%`, `%${keyword}%`) as ItemMatch[];
+  return query<ItemMatch>(
+    `SELECT category, item_id, name, title FROM items_core
+     WHERE name ILIKE $1 OR title ILIKE $1 LIMIT $2`,
+    [`%${keyword}%`, limit]
+  );
 }
 
 // item_id/row_index/position이나 "{라벨}_id" 외래키 컬럼은 수량이 아니라 식별자라서
@@ -67,82 +82,114 @@ function formatRow(row: Record<string, unknown>): Record<string, unknown> {
 // item_acquisition_*/item_transmutation_*/item_detail_list 공유 테이블에서 이 아이템의
 // 획득처/변성연금 정보를 전부 모아 온다. 이 테이블들은 카테고리 전용 테이블(예: certificate)과
 // 별도로 존재해서, item_id로 직접 조인하지 않으면 검색에서 누락되기 쉽다.
-function acquisitionInfo(
-  db: DatabaseSync,
-  category: string,
-  itemId: number
-): Record<string, unknown[]> {
-  const sharedTables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND " +
-        "(name LIKE 'item_acquisition_%' OR name LIKE 'item_transmutation_%' " +
-        "OR name = 'item_detail_list')"
-    )
-    .all() as { name: string }[];
+async function acquisitionInfo(category: string, itemId: number): Promise<Record<string, unknown[]>> {
+  const sharedTables = await query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = 'public' AND (
+       table_name LIKE 'item_acquisition_%' OR
+       table_name LIKE 'item_transmutation_%' OR
+       table_name = 'item_detail_list'
+     )`
+  );
 
   const info: Record<string, unknown[]> = {};
-  for (const { name: table } of sharedTables) {
-    const cols = new Set(
-      (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[]).map(
-        (r) => r.name
-      )
+  for (const { table_name: table } of sharedTables) {
+    const cols = await query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = $1`,
+      [table]
     );
-    if (!cols.has("category") || !cols.has("item_id")) continue;
-    const rows = db
-      .prepare(`SELECT * FROM "${table}" WHERE category = ? AND item_id = ?`)
-      .all(category, itemId);
+    const colNames = new Set(cols.map((c) => c.column_name));
+    if (!colNames.has("category") || !colNames.has("item_id")) continue;
+    const rows = await query(
+      `SELECT * FROM ${quoteIdent(table)} WHERE category = $1 AND item_id = $2`,
+      [category, itemId]
+    );
     if (rows.length > 0) info[table] = rows;
   }
   return info;
 }
 
-export function listCategories(): { category: string; count: number }[] {
-  const db = connect();
-  try {
-    return db
-      .prepare("SELECT category, COUNT(*) as count FROM items_core GROUP BY category ORDER BY category")
-      .all() as { category: string; count: number }[];
-  } finally {
-    db.close();
-  }
+export async function listCategories(): Promise<{ category: string; count: number }[]> {
+  return query<{ category: string; count: number }>(
+    "SELECT category, COUNT(*)::int as count FROM items_core GROUP BY category ORDER BY category"
+  );
 }
 
-export function getItemDetail(keyword: string): unknown[] {
-  const db = connect();
-  try {
-    const matches = findMatchingItems(db, keyword, 10);
+export async function getItemDetail(keyword: string): Promise<unknown[]> {
+  const matches = await findMatchingItems(keyword, 10);
 
-    return matches.map((m) => {
+  return Promise.all(
+    matches.map(async (m) => {
       const entry: Record<string, unknown> = { ...m };
-      const descRow = db
-        .prepare("SELECT description FROM items_core WHERE category = ? AND item_id = ?")
-        .get(m.category, m.item_id) as { description: string | null } | undefined;
-      if (descRow) entry.description = descRow.description;
-      const tableExists = db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-        .get(m.category);
-      if (tableExists) {
-        const row = db
-          .prepare(`SELECT * FROM "${m.category}" WHERE item_id = ?`)
-          .get(m.item_id);
-        if (row) entry.detail = row;
+      const descRows = await query<{ description: string | null }>(
+        "SELECT description FROM items_core WHERE category = $1 AND item_id = $2",
+        [m.category, m.item_id]
+      );
+      if (descRows[0]) entry.description = descRows[0].description;
+
+      const tableExists = await query(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+        [m.category]
+      );
+      if (tableExists.length > 0) {
+        const rows = await query(
+          `SELECT * FROM ${quoteIdent(m.category)} WHERE item_id = $1`,
+          [m.item_id]
+        );
+        if (rows[0]) entry.detail = rows[0];
       }
-      const acquisition = acquisitionInfo(db, m.category, m.item_id);
+      const acquisition = await acquisitionInfo(m.category, m.item_id);
       if (Object.keys(acquisition).length > 0) entry["획득_방법"] = acquisition;
       return entry;
-    });
-  } finally {
-    db.close();
-  }
+    })
+  );
 }
 
-export function searchItems(keyword: string): unknown[] {
-  const db = connect();
-  try {
-    return findMatchingItems(db, keyword, 30);
-  } finally {
-    db.close();
-  }
+export async function searchItems(keyword: string): Promise<unknown[]> {
+  return findMatchingItems(keyword, 30);
+}
+
+// 요청 처리 시점(런타임)에 process.env를 읽어야 한다 — route.ts의 createOpenAI() 호출과
+// 동일한 이유(모듈 최상단에서 만들면 Next.js가 빌드 타임 값을 인라인해버림).
+async function embedQuery(text: string): Promise<number[]> {
+  const openai = createOpenAI({
+    baseURL: process.env.OPENAI_API_BASE_URL,
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+  const { embedding } = await embed({
+    model: openai.textEmbeddingModel(EMBEDDING_MODEL),
+    value: text,
+  });
+  return embedding;
+}
+
+function vectorLiteral(vec: number[]): string {
+  return `[${vec.join(",")}]`;
+}
+
+type SemanticMatch = {
+  category: string;
+  item_id: number;
+  name: string | null;
+  title: string | null;
+  similarity: number;
+};
+
+// build_embeddings.py가 만든 item_embeddings(pgvector)에서 코사인 유사도로 가장 가까운
+// 아이템을 찾는다. 정확한 이름을 모르거나 "~용도의 아이템", "~한 효과를 가진 스킬"처럼
+// 개념/느낌으로 찾을 때 search_items/get_item_detail(정확한 이름 매칭)보다 유리하다.
+export async function semanticSearchItems(text: string, limit = 10): Promise<SemanticMatch[]> {
+  const embedding = await embedQuery(text);
+  return query<SemanticMatch>(
+    `SELECT ie.category, ie.item_id, ic.name, ic.title,
+            1 - (ie.embedding <=> $1::vector) AS similarity
+     FROM item_embeddings ie
+     JOIN items_core ic ON ic.category = ie.category AND ic.item_id = ie.item_id
+     ORDER BY ie.embedding <=> $1::vector
+     LIMIT $2`,
+    [vectorLiteral(embedding), limit]
+  );
 }
 
 type RawLink = { category: string; item_id: number; text: string };
@@ -162,21 +209,19 @@ function extractQuantity(cellText: string, linkText: string): number | null {
 // 링크도 섞여 있어서). "종류/내용"(필요/보상 등) 표에서 온 backlink는 원본 raw_tables
 // 셀 텍스트에 수량이 그대로 남아있으므로, 같은 (category,item_id,label) 키로 raw_tables를
 // 찾아 대상 아이템 링크가 있는 셀에서 수량을 뽑아 entries에 붙여준다.
-function attachQuantities(
-  db: DatabaseSync,
+async function attachQuantities(
   sourceCategory: string,
   sourceLabel: string,
   entries: { source_item_id: number; name: string | null; title: string | null; source_label: string }[],
   target: { category: string; item_id: number }
-): ((typeof entries)[number] & { qty: number | null })[] {
+): Promise<((typeof entries)[number] & { qty: number | null })[]> {
   const ids = [...new Set(entries.map((e) => e.source_item_id))];
-  const placeholders = ids.map(() => "?").join(",");
   const tables = ids.length
-    ? (db
-        .prepare(
-          `SELECT item_id, rows_json FROM raw_tables WHERE category = ? AND label = ? AND item_id IN (${placeholders})`
-        )
-        .all(sourceCategory, sourceLabel, ...ids) as { item_id: number; rows_json: string }[])
+    ? await query<{ item_id: number; rows_json: string }>(
+        `SELECT item_id, rows_json FROM raw_tables
+         WHERE category = $1 AND label = $2 AND item_id = ANY($3::int[])`,
+        [sourceCategory, sourceLabel, ids]
+      )
     : [];
 
   const qtyByItem = new Map<number, number>();
@@ -207,106 +252,106 @@ function attachQuantities(
 // get_item_detail(정방향: 이 항목 자신의 획득처)로는 못 찾고 이 함수로 찾아야 한다.
 // entries의 qty는 "종류/내용"(필요/보상 등) 표에서 온 backlink에서만 채워지고, 그 외
 // (판매 NPC 목록 등 수량 개념이 없는 링크)는 null이다.
-export function getBacklinks(keyword: string): unknown[] {
-  const db = connect();
-  try {
-    const matches = findMatchingItems(db, keyword, 10);
+export async function getBacklinks(keyword: string): Promise<unknown[]> {
+  const matches = await findMatchingItems(keyword, 10);
 
-    return matches.map((m) => {
-      const bySource = db
-        .prepare(
-          "SELECT source_category, COUNT(*) as count FROM item_backlinks " +
-            "WHERE target_category = ? AND target_item_id = ? " +
-            "GROUP BY source_category ORDER BY count DESC"
-        )
-        .all(m.category, m.item_id) as { source_category: string; count: number }[];
+  return Promise.all(
+    matches.map(async (m) => {
+      const bySource = await query<{ source_category: string; count: number }>(
+        `SELECT source_category, COUNT(*)::int as count FROM item_backlinks
+         WHERE target_category = $1 AND target_item_id = $2
+         GROUP BY source_category ORDER BY count DESC`,
+        [m.category, m.item_id]
+      );
 
-      const backlinks = bySource.map((g) => {
-        const rawEntries = db
-          .prepare(
-            "SELECT b.source_item_id, ic.name, ic.title, b.source_label FROM item_backlinks b " +
-              "JOIN items_core ic ON ic.category = b.source_category AND ic.item_id = b.source_item_id " +
-              "WHERE b.target_category = ? AND b.target_item_id = ? AND b.source_category = ? " +
-              // 수량(qty)순으로 최종 정렬해서 상위 ENTRY_OUTPUT_CAP개를 뽑아야 하므로,
-              // SQL 단계에서는 정렬 기준(qty)을 아직 몰라 source_item_id 순으로 넉넉히
-              // 가져온 뒤(RAW_ENTRY_FETCH_CAP) 아래에서 qty로 재정렬한다.
-              `ORDER BY b.source_item_id LIMIT ${RAW_ENTRY_FETCH_CAP}`
-          )
-          .all(m.category, m.item_id, g.source_category) as {
-          source_item_id: number;
-          name: string | null;
-          title: string | null;
-          source_label: string;
-        }[];
+      const backlinks = await Promise.all(
+        bySource.map(async (g) => {
+          const rawEntries = await query<{
+            source_item_id: number;
+            name: string | null;
+            title: string | null;
+            source_label: string;
+          }>(
+            `SELECT b.source_item_id, ic.name, ic.title, b.source_label FROM item_backlinks b
+             JOIN items_core ic ON ic.category = b.source_category AND ic.item_id = b.source_item_id
+             WHERE b.target_category = $1 AND b.target_item_id = $2 AND b.source_category = $3
+             -- 수량(qty)순으로 최종 정렬해서 상위 ENTRY_OUTPUT_CAP개를 뽑아야 하므로,
+             -- SQL 단계에서는 정렬 기준(qty)을 아직 몰라 source_item_id 순으로 넉넉히
+             -- 가져온 뒤(RAW_ENTRY_FETCH_CAP) 아래에서 qty로 재정렬한다.
+             ORDER BY b.source_item_id LIMIT $4`,
+            [m.category, m.item_id, g.source_category, RAW_ENTRY_FETCH_CAP]
+          );
 
-        const byLabel = new Map<string, typeof rawEntries>();
-        for (const e of rawEntries) {
-          const list = byLabel.get(e.source_label) ?? [];
-          list.push(e);
-          byLabel.set(e.source_label, list);
-        }
-        const entries = [...byLabel.entries()]
-          .flatMap(([label, list]) =>
-            attachQuantities(db, g.source_category, label, list, {
-              category: m.category,
-              item_id: m.item_id,
-            })
-          )
-          // qty가 있으면 큰 순서로("가장 많이 주는" 류 질문에 바로 답할 수 있게), qty가
-          // 없는 항목(수량 개념이 없는 링크)은 뒤로 보낸다.
-          .sort((a, b) => (b.qty ?? -1) - (a.qty ?? -1))
-          .slice(0, ENTRY_OUTPUT_CAP);
+          const byLabel = new Map<string, typeof rawEntries>();
+          for (const e of rawEntries) {
+            const list = byLabel.get(e.source_label) ?? [];
+            list.push(e);
+            byLabel.set(e.source_label, list);
+          }
+          const grouped = await Promise.all(
+            [...byLabel.entries()].map(([label, list]) =>
+              attachQuantities(g.source_category, label, list, {
+                category: m.category,
+                item_id: m.item_id,
+              })
+            )
+          );
+          const entries = grouped
+            .flat()
+            // qty가 있으면 큰 순서로("가장 많이 주는" 류 질문에 바로 답할 수 있게), qty가
+            // 없는 항목(수량 개념이 없는 링크)은 뒤로 보낸다.
+            .sort((a, b) => (b.qty ?? -1) - (a.qty ?? -1))
+            .slice(0, ENTRY_OUTPUT_CAP);
 
-        return { source_category: g.source_category, count: g.count, entries };
-      });
+          return { source_category: g.source_category, count: g.count, entries };
+        })
+      );
 
       return { category: m.category, item_id: m.item_id, name: m.name, title: m.title, backlinks };
-    });
-  } finally {
-    db.close();
-  }
+    })
+  );
 }
 
-export function findTables(keyword: string): string[] {
-  const db = connect();
-  try {
-    const rows = db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE ? ORDER BY name"
-      )
-      .all(`%${keyword.toLowerCase()}%`) as { name: string }[];
-    return rows.map((r) => r.name);
-  } finally {
-    db.close();
-  }
+export async function findTables(keyword: string): Promise<string[]> {
+  const rows = await query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = 'public' AND lower(table_name) LIKE $1 ORDER BY table_name`,
+    [`%${keyword.toLowerCase()}%`]
+  );
+  return rows.map((r) => r.table_name);
 }
 
-export function getTableSchema(tableName: string): { create_table: string; sample_rows: unknown[] } | { error: string } {
-  const db = connect();
-  try {
-    const row = db
-      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
-      .get(tableName) as { sql: string } | undefined;
-    if (!row) return { error: `table '${tableName}' not found` };
-    const sample = db.prepare(`SELECT * FROM "${tableName}" LIMIT 3`).all();
-    return { create_table: row.sql, sample_rows: sample };
-  } finally {
-    db.close();
-  }
+export async function getTableSchema(
+  tableName: string
+): Promise<{ create_table: string; sample_rows: unknown[] } | { error: string }> {
+  const cols = await query<{ column_name: string; data_type: string; is_nullable: "YES" | "NO" }>(
+    `SELECT column_name, data_type, is_nullable FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position`,
+    [tableName]
+  );
+  if (cols.length === 0) return { error: `table '${tableName}' not found` };
+
+  // Postgres엔 SQLite의 sqlite_master.sql 같은 원본 CREATE TABLE 텍스트가 없어서
+  // information_schema.columns로부터 동등한 형태를 재구성한다.
+  const columnLines = cols.map(
+    (c) => `  ${quoteIdent(c.column_name)} ${c.data_type}${c.is_nullable === "NO" ? " NOT NULL" : ""}`
+  );
+  const create_table = `CREATE TABLE ${quoteIdent(tableName)} (\n${columnLines.join(",\n")}\n)`;
+  const sample_rows = await query(`SELECT * FROM ${quoteIdent(tableName)} LIMIT 3`);
+  return { create_table, sample_rows };
 }
 
-export function runSql(query: string): { row_count: number; rows: unknown[] } | { error: string } {
-  const stripped = query.trim().replace(/;+$/, "");
+export async function runSql(
+  sqlText: string
+): Promise<{ row_count: number; rows: unknown[] } | { error: string }> {
+  const stripped = sqlText.trim().replace(/;+$/, "");
   if (!stripped.toLowerCase().startsWith("select")) {
     return { error: "SELECT 문만 실행할 수 있습니다." };
   }
-  const db = connect();
   try {
-    const rows = db.prepare(`SELECT * FROM (${stripped}) LIMIT ${MAX_ROWS}`).all();
+    const rows = await query(`SELECT * FROM (${stripped}) AS sub LIMIT $1`, [MAX_ROWS]);
     return { row_count: rows.length, rows: rows.map((r) => formatRow(r as Record<string, unknown>)) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    db.close();
   }
 }

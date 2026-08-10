@@ -1,9 +1,10 @@
 # DHO 아카이브 AI 검색 챗봇
 
-`dho_structured.sqlite3`를 자연어 질문으로 조회하는 Text-to-SQL 챗봇 프론트엔드.
-기존 `openwebui_tool_dho_sql.py`(OpenWebUI Tool 플러그인)를 대체하는, Vercel AI SDK 기반의
-직접 구축한 프론트엔드다. Next.js(App Router) + `ai`/`@ai-sdk/react`/`@ai-sdk/openai`로
-구현했고, `../dho_structured.sqlite3`를 Node.js 내장 `node:sqlite`(읽기 전용)로 직접 읽는다.
+PostgreSQL(구조화 데이터가 이관된 서빙 DB)을 자연어 질문으로 조회하는 Text-to-SQL 챗봇
+프론트엔드. 기존 `openwebui_tool_dho_sql.py`(OpenWebUI Tool 플러그인)를 대체하는, Vercel AI
+SDK 기반의 직접 구축한 프론트엔드다. Next.js(App Router) + `ai`/`@ai-sdk/react`/
+`@ai-sdk/openai`로 구현했고, `pg`(node-postgres)로 `DATABASE_URL`에 접속해서 읽기 전용으로
+조회한다.
 
 ## 도구(Tool) 목록
 
@@ -29,35 +30,29 @@ npm run dev                        # http://localhost:3000
 - `OPENAI_API_BASE_URL` — OpenAI 호환 API 엔드포인트
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` — 기본값 `gpt-5-mini`
-- `DHO_DB_PATH` (선택) — `dho_structured.sqlite3` 경로, 기본값은 `../dho_structured.sqlite3`
+- `DATABASE_URL` — PostgreSQL 접속 문자열 (예: `postgresql://dho:비밀번호@localhost:5432/dho`)
 
 ## 참고
 
-- API 라우트: `app/api/chat/route.ts` (Node.js 런타임 고정 — `node:sqlite` 때문에 Edge 불가)
+- API 라우트: `app/api/chat/route.ts` (Node.js 런타임 고정 — `pg`가 TCP 소켓을 쓰므로 Edge 불가)
 - 채팅 UI: `app/page.tsx`
 - DB 접근/도구 로직: `lib/dho-db.ts`
 
 ## Docker 배포 (NAS 등 원격 서버)
 
 `Dockerfile`(Next.js standalone 빌드, node:24-alpine)과 프로젝트 루트의
-`docker-compose.yml`로 배포한다. 로컬에서 `docker build`/`docker compose build chat`으로
-빌드 성공, `docker run`으로 컨테이너 기동 + 실제 OpenAI API 엔드포인트까지 요청 도달하는
-것까지 확인했다(플레이스홀더 키라 401만 확인, 실제 응답까지는 미검증).
+`docker-compose.yml`로 배포한다. `postgres` 서비스가 먼저 뜬 뒤 `chat`이 `DATABASE_URL`로
+접속한다(SQLite 파일 마운트는 더 이상 필요 없음).
 
 ### 1. 서버에 프로젝트 전체를 옮긴다
 
-`dbsql/` 폴더 전체(코드 + `dho_structured.sqlite3`)가 필요하다. 이 프로젝트는 git
-저장소가 아니므로 `rsync`/`scp`로 복사하거나, 평소 NAS에 파일을 옮기던 방법을 그대로
-쓰면 된다. 예시(rsync, SSH):
+`dbsql/` 폴더 전체(코드)가 필요하다. 이 프로젝트는 git 저장소가 아니므로 `rsync`/`scp`로
+복사하거나, 평소 NAS에 파일을 옮기던 방법을 그대로 쓰면 된다. 예시(rsync, SSH):
 
 ```bash
 rsync -avz --exclude 'chat/node_modules' --exclude 'chat/.next' \
   /c/dev/dho/dbsql/ user@nas-host:/path/to/dbsql/
 ```
-
-`dho_structured.sqlite3`는 235MB 정도라 전송에 시간이 걸릴 수 있다. 이후 DB를
-재스테이징할 때마다(예: `build_structured_db.py stage` 재실행) 이 파일만 다시
-동기화해주면 됨.
 
 ### 2. 서버에서 `.env` 준비
 
@@ -65,21 +60,18 @@ rsync -avz --exclude 'chat/node_modules' --exclude 'chat/.next' \
 
 ```bash
 cp .env.example .env
-# .env를 열어서 OPENAI_API_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL 값을 채운다
+# .env를 열어서 OPENAI_API_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL/POSTGRES_* 값을 채운다
 ```
 
 ### 3. 빌드 + 기동
 
 ```bash
 cd /path/to/dbsql
-docker compose up -d --build chat
+docker compose up -d --build postgres chat
 ```
 
 - `chat` 서비스가 `./chat`(Dockerfile 위치)을 빌드해서 `dho-chat` 컨테이너로 뜬다.
-- `dbsql/` 폴더 전체를 컨테이너 안 `/data/dbsql`에 읽기 전용으로 마운트하므로,
-  `dho_structured.sqlite3`를 다시 스테이징해도 컨테이너 재시작 없이 최신 파일을 그대로
-  읽는다(볼륨 마운트라 파일 갱신이 바로 반영됨. 컨테이너 재빌드는 코드가 바뀔 때만
-  필요).
+- `postgres`가 healthy 상태가 되어야 `chat`이 기동한다(`depends_on: condition: service_healthy`).
 - 기본 포트는 3000. 이미 3000을 쓰는 다른 서비스가 있으면 `docker-compose.yml`의
   `ports: ["3000:3000"]`를 원하는 호스트 포트로 바꾸면 된다(예: `"8090:3000"`).
 - `restart: unless-stopped`가 설정돼 있어서 NAS 재부팅 시에도 자동으로 다시 뜬다.

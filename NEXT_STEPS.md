@@ -204,9 +204,32 @@
       경우는 없었음 — raw_attrs 기반이라 있으면 다 잡힘)는 이름만 있는 기존 단순 목록으로
       자동 폴백. 70개 카테고리 전체 + 각 컬럼 + 양방향 정렬 조합을 스모크 테스트해서
       에러 0건 확인
-- [ ] Docker화해서 NAS docker-compose 스택에 서비스로 추가할지 결정 (현재는 로컬 `python
-      dho_webapp.py`로만 실행 중, :5050)
+- [x] Docker화해서 NAS docker-compose 스택에 서비스로 추가 (2026-08-03, NAS 배포 완료)
 
 ## 다음 단계 5 — 마무리
 - [ ] 크롤링 스크립트를 주기적 재크롤링(업데이트 감지)용으로 확장할지 결정
 - [ ] 전체 파이프라인 문서화 (크롤링 → 파싱 → 검색 → 웹앱)
+
+## 다음 단계 6 — SQLite → PostgreSQL 전환 + pgvector 시맨틱 검색 (완료, 2026-08-10)
+
+`dho_structured.sqlite3` 기반이던 webapp/chat을 PostgreSQL 하나로 통합하고, chat에 아이템
+시맨틱(벡터) 검색을 추가한 대규모 작업. **Phase 1(Postgres 마이그레이션)과 Phase 2(pgvector
+임베딩) 전부 완료, 로컬+NAS 배포/검증까지 끝남.** 상세 설계/결정 근거는 `plan.md`,
+진행 체크리스트는 `checklist.md`, 세부 판단 로그는 `context-notes.md`와
+`claude_logs/postgresql-마이그레이션-phase1.md` 참고 — 이 프로젝트를 다시 다룰 때는
+`checklist.md`의 Phase 3(Wiki.js) 항목부터 이어가면 된다.
+
+- [x] **Phase 1 — PostgreSQL 마이그레이션**: `migrate_to_postgres.py`(SQLite "원본성" 4개
+      테이블 이관) + 파생 테이블 8개 스크립트를 psycopg로 재작성(Postgres 대상) +
+      `chat/lib/dho-db.ts`(pg 드라이버) + `dho_webapp.py`(psycopg) 재작성. `items_fts`
+      (SQLite FTS5)는 `pg_trgm` 기반 `items_search`로 교체. notion-sync 기능(사용자 요청으로
+      불필요해짐)은 완전 제거. NAS 배포 완료(포트 충돌 등 이슈 해결, 데이터 이관 검증 완료).
+- [x] **Phase 2 — pgvector 아이템 시맨틱 검색**: `build_embeddings.py`(OpenAI
+      text-embedding-3-small)로 33,496개 항목 전부 임베딩 생성, `item_embeddings`(HNSW
+      코사인 인덱스) 구축. `chat`에 `semantic_search_items` 도구 추가 — 정확한 이름을 몰라도
+      개념/느낌으로 아이템 검색 가능. 로컬+NAS 양쪽 다 임베딩 생성 및 실사용 질문 검증 완료.
+- [ ] **Phase 3 — Wiki.js 배포 + 콘텐츠 생성 + 청크 임베딩 (다음 세션 예정)**: DHO 데이터를
+      Wiki.js 페이지로 자동 생성/동기화하고, 위키 콘텐츠를 청킹해서 pgvector에 임베딩 —
+      chat이 DB(구조화 데이터)와 Wiki(사람이 편집 가능한 콘텐츠)를 함께 검색하되, 답변의
+      사실 근거는 항상 DB로 grounding하는 구조. 상세 설계는 `plan.md`/`checklist.md`의
+      Phase 3 항목 참고 (아직 미착수).

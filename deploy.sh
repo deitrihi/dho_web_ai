@@ -7,7 +7,7 @@
 # 사용법
 # ------
 #   cp deploy.config.example deploy.config   # 최초 1회, 값 채우기
-#   ./deploy.sh              # webapp + chat 둘 다 배포
+#   ./deploy.sh              # postgres + webapp + chat 전부 배포
 #   ./deploy.sh webapp       # webapp만 배포
 #   ./deploy.sh chat         # chat만 배포
 #
@@ -21,7 +21,7 @@ CONFIG_FILE="$SCRIPT_DIR/deploy.config"
 SERVICE="${1:-}"
 
 if [ -n "$SERVICE" ] && [ "$SERVICE" != "webapp" ] && [ "$SERVICE" != "chat" ]; then
-  echo "사용법: $0 [webapp|chat]  (인자를 안 주면 둘 다 배포)" >&2
+  echo "사용법: $0 [webapp|chat]  (인자를 안 주면 전부 배포)" >&2
   exit 1
 fi
 
@@ -50,10 +50,9 @@ fi
 SSH_CMD=(ssh "${SSH_OPTS[@]}")
 SSH_CMD_STR="ssh ${SSH_OPTS[*]}"
 
-# 서버에 안 보낼 것들: 빌드/개발 산출물, 원본 HTML 캐시(1.5GB, 배포엔 안 씀), 배포 자격증명.
-# dho_structured.sqlite3는 webapp의 항목 추가/수정 기능으로 서버 쪽이 최신 상태라 절대 안
-# 보낸다 — rsync는 --exclude된 파일을 비교 대상에서 아예 빼서 --delete로도 안 지우고,
-# tar는 원래 archive에 없는 파일이라 추출 시 서버 파일이 그대로 보존된다.
+# 서버에 안 보낼 것들: 빌드/개발 산출물, 원본 HTML 캐시(1.5GB)/구조화 DB(수백MB, 둘 다
+# PostgreSQL 이관 이후 서버(webapp/chat)가 더 이상 안 읽음 — 데이터는 migrate_to_postgres.py로
+# 별도 이관), 배포 자격증명.
 EXCLUDE_PATTERNS=(
   .git
   .claude
@@ -68,7 +67,7 @@ EXCLUDE_PATTERNS=(
   chat/.next
 )
 
-echo "==> 1/4 로컬 빌드 검증 ($([ -n "$SERVICE" ] && echo "$SERVICE" || echo "webapp + chat"))"
+echo "==> 1/4 로컬 빌드 검증 ($([ -n "$SERVICE" ] && echo "$SERVICE" || echo "postgres + webapp + chat"))"
 # 실제 배포(빌드)는 NAS에서 하지만, 소스를 전송하기 전에 로컬에서 먼저 빌드해봐서
 # 빌드 자체가 깨져 있으면 (전송한 뒤 NAS에서 실패하는 대신) 여기서 바로 걸러낸다.
 # docker가 이 셸에서 실제로 안 되면(예: rsync 때문에 WSL로 실행했는데 Docker Desktop WSL
@@ -84,7 +83,7 @@ else
   echo "[안내] 이 셸에서 docker가 실제로 동작하지 않아 로컬 빌드 검증을 건너뜁니다 (실제 빌드는 4/4에서 NAS가 함)." >&2
 fi
 
-echo "==> 2/4 [$REMOTE:$DEPLOY_PATH] 코드 전송 (dho_structured.sqlite3는 서버 최신본 유지, 전송 제외)"
+echo "==> 2/4 [$REMOTE:$DEPLOY_PATH] 코드 전송 (dho_cache.sqlite3/dho_structured.sqlite3는 전송 제외)"
 "${SSH_CMD[@]}" "$REMOTE" "mkdir -p '$DEPLOY_PATH'"
 
 # 전송 방식 우선순위:
@@ -124,9 +123,9 @@ case "$TRANSFER_MODE" in
 esac
 
 echo "==> 3/4 .env 확인"
-"${SSH_CMD[@]}" "$REMOTE" "test -f '$DEPLOY_PATH/.env' || echo '[경고] $DEPLOY_PATH/.env 가 없습니다 — chat 서비스는 OPENAI_* 키 설정이 있어야 동작합니다 (.env.example 참고).'"
+"${SSH_CMD[@]}" "$REMOTE" "test -f '$DEPLOY_PATH/.env' || echo '[경고] $DEPLOY_PATH/.env 가 없습니다 — POSTGRES_*(postgres/webapp/chat)와 OPENAI_*(chat) 키 설정이 있어야 동작합니다 (.env.example 참고).'"
 
-echo "==> 4/4 docker compose 빌드 + 기동 ($([ -n "$SERVICE" ] && echo "$SERVICE" || echo "webapp + chat"))"
+echo "==> 4/4 docker compose 빌드 + 기동 ($([ -n "$SERVICE" ] && echo "$SERVICE" || echo "postgres + webapp + chat"))"
 "${SSH_CMD[@]}" "$REMOTE" "cd '$DEPLOY_PATH' && docker compose up -d --build $SERVICE"
 
 echo "완료. 로그 확인: ssh -p $DEPLOY_PORT $REMOTE \"cd $DEPLOY_PATH && docker compose logs -f $SERVICE\""
