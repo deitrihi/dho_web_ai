@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [미커밋]
+## 2026-08-10 | 5953f6b
 
 - Dockerfile — `build_search_index.py`가 `COPY` 목록에서 빠져 있던 문제 수정. NAS의
   `DERIVED_PIPELINE_SCRIPTS`(항목 저장 시마다 재실행)가 이 스크립트 없이 매번 실패하며
