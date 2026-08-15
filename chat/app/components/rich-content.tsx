@@ -11,27 +11,23 @@ export function MarkdownText({ text }: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks]}
       components={{
-        p: (props) => <p className="mb-2 last:mb-0" {...props} />,
-        ul: (props) => <ul className="mb-2 list-disc pl-5 last:mb-0" {...props} />,
-        ol: (props) => <ol className="mb-2 list-decimal pl-5 last:mb-0" {...props} />,
-        li: (props) => <li className="mb-0.5" {...props} />,
-        strong: (props) => <strong className="font-semibold text-neutral-100" {...props} />,
-        a: (props) => (
-          <a className="text-blue-400 underline" target="_blank" rel="noreferrer" {...props} />
-        ),
-        h1: (props) => <h1 className="mb-2 text-base font-bold" {...props} />,
-        h2: (props) => <h2 className="mb-2 text-sm font-bold" {...props} />,
-        h3: (props) => <h3 className="mb-1 text-sm font-semibold" {...props} />,
+        p: (props) => <p className="mb-2" {...props} />,
+        ul: (props) => <ul className="mb-2 ps-4" {...props} />,
+        ol: (props) => <ol className="mb-2 ps-4" {...props} />,
+        li: (props) => <li className="mb-1" {...props} />,
+        strong: (props) => <strong className="fw-semibold" {...props} />,
+        a: (props) => <a target="_blank" rel="noreferrer" {...props} />,
+        h1: (props) => <h1 className="mb-2 fs-6 fw-bold" {...props} />,
+        h2: (props) => <h2 className="mb-2 fs-6 fw-bold" {...props} />,
+        h3: (props) => <h3 className="mb-1 fs-6 fw-semibold" {...props} />,
         blockquote: (props) => (
-          <blockquote
-            className="mb-2 border-l-2 border-neutral-700 pl-2 text-neutral-400 last:mb-0"
-            {...props}
-          />
+          <blockquote className="mb-2 border-start ps-2 text-body-secondary" {...props} />
         ),
-        hr: () => <hr className="my-2 border-neutral-800" />,
+        hr: () => <hr className="my-2" />,
         pre: (props) => (
           <pre
-            className="mb-2 overflow-x-auto rounded-md border border-neutral-800 bg-neutral-950 p-2 font-mono text-[0.85em] last:mb-0"
+            className="mb-2 overflow-x-auto rounded border bg-body-tertiary p-2 font-monospace"
+            style={{ fontSize: "0.85em" }}
             {...props}
           />
         ),
@@ -45,21 +41,22 @@ export function MarkdownText({ text }: { text: string }) {
             );
           }
           return (
-            <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[0.85em]" {...props}>
+            <code
+              className="rounded bg-body-tertiary px-1 font-monospace"
+              style={{ fontSize: "0.85em" }}
+              {...props}
+            >
               {children}
             </code>
           );
         },
         table: (props) => (
-          <div className="mb-2 overflow-x-auto last:mb-0">
-            <table className="w-full border-collapse text-xs" {...props} />
+          <div className="mb-2 overflow-x-auto">
+            <table className="table table-sm table-bordered mb-0" {...props} />
           </div>
         ),
-        thead: (props) => <thead className="bg-neutral-800" {...props} />,
-        th: (props) => (
-          <th className="border border-neutral-700 px-2 py-1 text-left font-medium" {...props} />
-        ),
-        td: (props) => <td className="border border-neutral-800 px-2 py-1 align-top" {...props} />,
+        th: (props) => <th {...props} />,
+        td: (props) => <td className="align-top" {...props} />,
       }}
     >
       {text}
@@ -70,11 +67,11 @@ export function MarkdownText({ text }: { text: string }) {
 // tool 실행 결과(JSON)를 배열-of-객체는 표로, 객체는 key-value 목록으로, 그 외엔 텍스트로 표시
 export function JsonValue({ value }: { value: unknown }) {
   if (value === null || value === undefined) {
-    return <span className="text-neutral-600">—</span>;
+    return <span className="text-body-secondary">—</span>;
   }
 
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span className="text-neutral-600">(없음)</span>;
+    if (value.length === 0) return <span className="text-body-secondary">(없음)</span>;
     const allPlainObjects = value.every(
       (v) => v !== null && typeof v === "object" && !Array.isArray(v)
     );
@@ -82,7 +79,7 @@ export function JsonValue({ value }: { value: unknown }) {
       return <JsonTable rows={value as Record<string, unknown>[]} />;
     }
     return (
-      <ul className="list-disc pl-4">
+      <ul className="ps-3 mb-0">
         {value.map((v, i) => (
           <li key={i}>
             <JsonValue value={v} />
@@ -94,13 +91,13 @@ export function JsonValue({ value }: { value: unknown }) {
 
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
-    if (entries.length === 0) return <span className="text-neutral-600">{"{}"}</span>;
+    if (entries.length === 0) return <span className="text-body-secondary">{"{}"}</span>;
     return (
-      <div className="space-y-1.5">
+      <div className="d-flex flex-column gap-1">
         {entries.map(([k, v]) => (
           <div key={k}>
-            <div className="text-[10px] uppercase tracking-wide text-neutral-500">{k}</div>
-            <div className="pl-1">
+            <div className="text-uppercase text-body-secondary" style={{ fontSize: "0.9em" }}>{k}</div>
+            <div className="ps-1">
               <JsonValue value={v} />
             </div>
           </div>
@@ -116,13 +113,11 @@ function JsonTable({ rows }: { rows: Record<string, unknown>[] }) {
   const columns = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-xs">
-        <thead className="bg-neutral-800">
+      <table className="table table-sm table-bordered mb-0">
+        <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c} className="border border-neutral-700 px-2 py-1 text-left font-medium">
-                {c}
-              </th>
+              <th key={c}>{c}</th>
             ))}
           </tr>
         </thead>
@@ -130,7 +125,7 @@ function JsonTable({ rows }: { rows: Record<string, unknown>[] }) {
           {rows.map((row, i) => (
             <tr key={i}>
               {columns.map((c) => (
-                <td key={c} className="border border-neutral-800 px-2 py-1 align-top">
+                <td key={c} className="align-top">
                   <JsonValue value={row[c]} />
                 </td>
               ))}

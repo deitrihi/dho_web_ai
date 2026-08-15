@@ -1,5 +1,65 @@
 # CHANGELOG
 
+## [미커밋]
+
+- `chat/app/api/chat/route.ts` — 챗봇 2단계 LLM 구조의 역할을 재배치: 기존엔 gpt-5-mini가
+  "계획"만 세우고 deepseek가 도구 실행+답변 작성을 전부 했는데, 이제 gpt-5-mini가 실제
+  도구 호출(DB/위키 조회, SQL 실행)을 전담해 원본 자료를 모으고, deepseek는 도구 없이 그
+  자료만으로 최종 답변을 작성(비싼 모델은 짧은 도구 호출 JSON만, 싼 모델이 긴 답변 텍스트를
+  담당해 출력 토큰 비용 절감). `EXECUTION_SYSTEM_PROMPT`(gpt-5-mini, 자료 수집 전용,
+  마지막에 답변 대신 짧은 완료 문구만)/`SYNTHESIS_SYSTEM_PROMPT`(deepseek, qty 정렬·
+  similarity 필터링·wiki grounded_item 우선순위 등 자료 해석 규칙 포함)로 분리.
+  질문 직후부터 응답이 안 보이던 문제(사용자 피드백)도 같이 해결: `createUIMessageStream`
+  + `writer.merge()`로 1단계 도구 호출 진행상황을 실시간 스트리밍하고(`sendFinish: false`),
+  끝나는 대로 2단계 답변을 같은 메시지에 이어붙여 스트리밍(`sendStart: false`) — 이전엔
+  1단계가 끝날 때까지 화면에 아무것도 안 뜨던 것을 개선. `npm run build`/`npm run lint`
+  통과 확인, NAS 재배포 완료(실사용 검증은 사용자 확인 필요).
+
+- `chat/app/layout.tsx`/`globals.css`/`page.tsx`/`components/rich-content.tsx`/`logs/page.tsx`/
+  `package.json`/`postcss.config.mjs` — chat app(Next.js)이 webapp의 Bootstrap 전환 이후
+  스타일이 어긋나 있던 문제 수정. Tailwind CSS 완전 제거하고 webapp과 동일한 Bootstrap
+  5.3.3 CDN + 기본 색상 + OS 자동 다크모드 감지 스크립트(`data-bs-theme`)로 전환. 헤더/메시지
+  버블/도구호출 details/입력폼/마크다운·JSON 렌더링의 Tailwind 클래스를 Bootstrap 컴포넌트
+  클래스로 재작성. `postcss.config.mjs`는 Tailwind 전용이라 삭제, `tailwindcss`/
+  `@tailwindcss/postcss` devDependency 제거. 다크모드 감지 스크립트가 `<html>` 속성을 React
+  밖에서 직접 바꿔 하이드레이션 경고가 떠서 `suppressHydrationWarning` 추가로 해소.
+  `npm run build`/`npm run lint` 통과, Playwright 스크린샷으로 라이트/다크 렌더링 확인.
+- `chat/app/api/chat/route.ts`/`.env.example`/`docker-compose.yml` — 챗봇 LLM 호출을
+  2단계로 분리: 1단계(검색 계획)는 OpenAI `gpt-5-mini`가 도구 없이 텍스트 계획만 생성,
+  2단계(실제 도구 호출 실행 + 최종 답변 정리)는 DeepSeek `deepseek-v4-flash`가 담당(기존
+  9개 도구 그대로 바인딩). DeepSeek API가 OpenAI 호환이라 별도 패키지 없이 기존
+  `@ai-sdk/openai`의 `createOpenAI()`를 baseURL만 바꿔 재사용. 임베딩(시맨틱 검색)은
+  DeepSeek에 대응 API가 없어 계속 OpenAI(`text-embedding-3-small`) 유지. 신규 env
+  `DEEPSEEK_API_BASE_URL`/`DEEPSEEK_API_KEY`/`DEEPSEEK_MODEL` 추가. NAS 배포 후 실사용
+  중 연속 질문(2번째 턴부터) 시 `AI_APICallError: Invalid 'input[2].id'`(400)로 서버
+  에러가 나는 버그 발견 — 1차로 1단계(계획) 호출에 텍스트 파트만 남기고 도구 호출/결과
+  파트를 제거해봤지만 재현됨(불충분). 재확인 결과 진짜 원인은: 남은 텍스트 파트에도
+  `providerMetadata`가 붙어 있고, `convertToModelMessages`가 이를 그대로 유지하는데,
+  2단계(deepseek) 응답의 providerMetadata는 "openai" 네임스페이스로 태깅됨(같은
+  `@ai-sdk/openai` 패키지를 baseURL만 바꿔 재사용하기 때문) — 그래서 1단계의 진짜
+  OpenAI Responses API 호출이 이걸 "이전에 OpenAI 자신이 발급한 항목 ID"로 오인해
+  그대로 전달했고, 형식이 안 맞아 거부당함. 최종 수정: `convertToModelMessages`를 아예
+  안 쓰고, 1단계 메시지를 `{role, content}` 순수 문자열로 직접 구성해서 provider
+  메타데이터가 애초에 안 실리게 함. `npm run build`/`npm run lint` 통과 확인, NAS
+  재배포 완료(연속 질문 실동작 검증은 사용자 확인 필요).
+- `chat/Dockerfile` — `/chat/logs` 페이지에 에러가 하나도 안 쌓이던 문제 발견: 컨테이너가
+  비root 사용자(`nextjs`, uid 1001)로 도는데 `chat_logs` 볼륨 마운트 지점(`/data/logs`)을
+  이미지에 미리 안 만들어놔서, Docker가 볼륨을 처음 생성할 때 root 소유로 만들어버려
+  `EACCES: permission denied`로 로그 파일 기록이 계속 실패하고 있었음(콘솔 로그에는
+  에러가 찍히니 위 버그는 그걸로 발견함). `USER nextjs` 전에 `mkdir -p /data/logs &&
+  chown -R nextjs:nodejs /data/logs`로 미리 소유권을 잡아둠(새 볼륨은 이제부터 정상).
+  NAS의 기존 `dho_dbsql_chat_logs` 볼륨은 이미 root 소유로 생성돼 있어 이미지 수정만으론
+  안 고쳐져서 `docker exec -u root dho-chat chown -R nextjs:nodejs /data/logs`로 직접
+  수정. 재배포 후 컨테이너 안에서 실제 쓰기 테스트(`touch`)로 EACCES 해소 확인.
+- `chat/lib/dho-db.ts`/`chat/app/api/chat/route.ts` — `semantic_search_wiki` 도구 추가,
+  결과에 `grounded_item`(items_core 조인)을 포함해 DB 원본을 사실 근거로 우선하도록 함.
+- `chat/app/api/chat/route.ts` — 같은 키워드로 `get_item_detail`을 부른 뒤
+  `search_items`/`semantic_search_items`를 또 부르는 중복 호출 때문에 도구 호출 한도에
+  걸려 답을 못 끝내는 문제 발견. 시스템 프롬프트에 중복 호출 금지 규칙 추가 +
+  `stepCountIs`를 16 → 24로 상향(재료 여러 개의 구매처를 한 번에 조사하는 질문에 여유
+  확보). 재현 시나리오("플레이트 아머 재료+구매처")로 도구 호출 10회 초과 → 실패에서
+  4회 → 정상 완료로 검증.
+
 ## 2026-08-16 | 47b2403
 
 - `dho_webapp.py`/`.env.example`/`templates/link_result.html` — Wiki.js 문서 안에서

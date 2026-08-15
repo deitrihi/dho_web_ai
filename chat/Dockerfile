@@ -27,6 +27,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# /data/logs(chat_logs named volume 마운트 지점)를 nextjs 소유로 미리 만들어둔다. 없으면
+# Docker가 볼륨을 처음 만들 때 root:root로 생성해서, 아래 USER nextjs(비root)가 로그
+# 파일을 못 쓰고 EACCES로 실패한다.
+RUN mkdir -p /data/logs && chown -R nextjs:nodejs /data/logs
+
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

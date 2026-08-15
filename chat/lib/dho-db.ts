@@ -192,6 +192,63 @@ export async function semanticSearchItems(text: string, limit = 10): Promise<Sem
   );
 }
 
+type WikiChunkMatch = {
+  page_path: string;
+  category: string | null;
+  item_id: number | null;
+  chunk_text: string;
+  similarity: number;
+};
+
+// build_wiki_chunks.py가 만든 wiki_chunks(Wiki.js 페이지를 헤더 단위로 청킹한 벡터)에서
+// 코사인 유사도로 가장 가까운 청크를 찾는다. Wiki.js는 사람이 직접 편집할 수 있는
+// 콘텐츠(설명/가이드 등)까지 포함하므로 item_embeddings(구조화 데이터 전용)로는 못 찾는
+// 질문에 보완적으로 쓴다. page_path가 "dho/<category>/<item_id>" 형식인 청크(카테고리
+// 페이지 자동 생성분)는 items_core 원본 레코드를 함께 조인해서 반환한다 — 최종 답변의
+// 사실 근거는 항상 이 grounded_item(DB 원본)을 우선하고, chunk_text는 참고/설명 보조로만
+// 쓴다. category/item_id가 없는 청크(자유 위키 페이지, 예: 공략/개요 글)는 grounded_item이
+// null이며 chunk_text 자체가 근거다.
+export async function semanticSearchWiki(text: string, limit = 5): Promise<unknown[]> {
+  const embedding = await embedQuery(text);
+  const chunks = await query<WikiChunkMatch>(
+    `SELECT page_path, category, item_id, chunk_text,
+            1 - (embedding <=> $1::vector) AS similarity
+     FROM wiki_chunks
+     ORDER BY embedding <=> $1::vector
+     LIMIT $2`,
+    [vectorLiteral(embedding), limit]
+  );
+
+  return Promise.all(
+    chunks.map(async (c) => {
+      if (c.category === null || c.item_id === null) {
+        return {
+          page_path: c.page_path,
+          chunk_text: c.chunk_text,
+          similarity: c.similarity,
+          grounded_item: null,
+        };
+      }
+      const grounded = await query<{
+        name: string | null;
+        title: string | null;
+        description: string | null;
+      }>(
+        "SELECT name, title, description FROM items_core WHERE category = $1 AND item_id = $2",
+        [c.category, c.item_id]
+      );
+      return {
+        page_path: c.page_path,
+        category: c.category,
+        item_id: c.item_id,
+        chunk_text: c.chunk_text,
+        similarity: c.similarity,
+        grounded_item: grounded[0] ?? null,
+      };
+    })
+  );
+}
+
 type RawLink = { category: string; item_id: number; text: string };
 type RawCell = { text: string; links: RawLink[] };
 
