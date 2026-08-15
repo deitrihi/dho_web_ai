@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [미커밋]
+## 2026-08-16 | 47b2403
 
 - `dho_webapp.py`/`.env.example`/`templates/link_result.html` — Wiki.js 문서 안에서
   `[텍스트](/link/이름)`으로 쓰면 정확한 `dho/<category>/<item_id>` 경로 없이 항목 이름만
