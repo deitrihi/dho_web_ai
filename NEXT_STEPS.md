@@ -228,8 +228,15 @@
       text-embedding-3-small)로 33,496개 항목 전부 임베딩 생성, `item_embeddings`(HNSW
       코사인 인덱스) 구축. `chat`에 `semantic_search_items` 도구 추가 — 정확한 이름을 몰라도
       개념/느낌으로 아이템 검색 가능. 로컬+NAS 양쪽 다 임베딩 생성 및 실사용 질문 검증 완료.
-- [ ] **Phase 3 — Wiki.js 배포 + 콘텐츠 생성 + 청크 임베딩 (다음 세션 예정)**: DHO 데이터를
-      Wiki.js 페이지로 자동 생성/동기화하고, 위키 콘텐츠를 청킹해서 pgvector에 임베딩 —
-      chat이 DB(구조화 데이터)와 Wiki(사람이 편집 가능한 콘텐츠)를 함께 검색하되, 답변의
-      사실 근거는 항상 DB로 grounding하는 구조. 상세 설계는 `plan.md`/`checklist.md`의
-      Phase 3 항목 참고 (아직 미착수).
+- [x] **Phase 3 — Wiki.js 배포 + 콘텐츠 생성 + 청크 임베딩 (완료, 2026-08-10~15)**:
+      docker-compose에 `wikijs` 서비스 추가, `build_wikijs_pages.py`(DHO 데이터→Markdown
+      +GraphQL 생성/갱신)/`build_wiki_chunks.py`(헤더 기준 청킹+임베딩, 웹훅 미지원이라
+      `wikidb.pages.hash` 폴링) 구현. chat에 `semantic_search_wiki` 도구 추가(DB 원본
+      grounding 포함). 70개 카테고리 전체(33,496건) 백필 + 125,328개 청크 임베딩 로컬
+      완료(백필 도중 Wiki.js 동시쓰기 버그, 로컬 Docker Desktop 다운, 페이지 누적에 따른
+      저장 지연/타임아웃을 순서대로 발견·수정하며 진행 — 상세는 `context-notes.md`).
+      NAS엔 재백필 대신 로컬에서 검증된 DB(`wikidb` + `wiki_chunks`/`wiki_page_state`/
+      `wiki_chunk_sync_state`)를 `pg_dump`/`pg_restore`로 그대로 이관, NAS
+      `semantic_search_wiki` 실사용 질문으로 재검증 완료. 로컬/NAS 양쪽 다 서빙 준비 끝남.
+      상세: `plan.md`/`checklist.md`/`context-notes.md`의 Phase 3 항목,
+      `claude_logs/phase3-wikijs-배포-청크임베딩.md`.

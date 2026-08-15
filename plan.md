@@ -72,10 +72,69 @@ Wiki 콘텐츠를 함께 검색하게 만드는 게 최종 목표.
 
 ## 리스크 / 확인 필요
 - NAS(Synology) 리소스가 postgres + pgvector + wikijs + 기존 webapp/chat까지 동시에 감당
-  가능한지 사전 확인 필요 (메모리/디스크 여유).
+  가능한지 사전 확인 필요 (메모리/디스크 여유). **(NAS 배포 시 확인 예정, 아직 미확인)**
 - `dho_structured.sqlite3`는 현재 NAS에서 webapp이 읽기-쓰기로 마운트하고 있음(항목
-  추가/수정 기능) — Phase 1에서 webapp도 함께 PostgreSQL로 전환.
-- Wiki.js가 "페이지 저장 시점" 이벤트를 웹훅으로 제공하는지 미확인 — 지원 안 하면 주기적
-  폴링(`updatedAt` 비교) 방식으로 대체. Phase 3 착수 시 확인.
-- 33,496개 페이지를 Wiki.js GraphQL API로 벌크 생성하는 처리량/시간 검증 필요 (Phase 3에서
-  소규모 카테고리로 먼저 파일럿 후 전체 확대).
+  추가/수정 기능) — Phase 1에서 webapp도 함께 PostgreSQL로 전환. (완료)
+- ~~Wiki.js가 "페이지 저장 시점" 이벤트를 웹훅으로 제공하는지 미확인~~ **(해결,
+  2026-08-10) 미지원 확정** — requarks/wiki 이슈 트래커에 기능 요청으로만 존재.
+  `wikidb.pages.hash` 비교 기반 폴링(`build_wiki_chunks.py`)으로 구현 완료. 반영 지연이
+  있다는 트레이드오프는 남아있음 — NAS 배포 시 cron 주기를 사용자와 상의 필요.
+- ~~33,496개 페이지를 Wiki.js GraphQL API로 벌크 생성하는 처리량/시간 검증 필요~~
+  **(검증 완료, 2026-08-10)** 파일럿(tarotCard 22건, dungeon 35건)에서 링크/표/이미지
+  렌더링 전부 확인. 처리량 실측 약 25~30페이지/분 — 전체 33,496건은 수 시간 소요(최초 1회
+  성 백필, 이후 재실행은 콘텐츠 해시 비교로 변경분만 처리해 훨씬 빠름). 이 세션에서
+  `--all` 백그라운드 실행 착수.
+- Wiki.js 공식 이미지(`ghcr.io/requarks/wiki`)는 `ADMIN_EMAIL`/`ADMIN_PASS` 환경변수로
+  설치 마법사를 스킵하지 못함(검색 결과와 달리 서드파티 포크 전용 기능이었음) — 대신
+  `server/setup.js` 소스 확인 후 `POST /finalize` 직접 호출로 완전 자동화함. NAS 배포
+  시에도 컨테이너 최초 기동 후 동일 호출 필요(deploy.sh 반영 필요, 미완료).
+
+## Phase 4 — 위키 브라우징 진입점 + 자유 문서 지원 (2026-08-15 착수)
+
+Phase 3 완료 후 사용자가 위키 홈 화면/사이드바에 들어가도 아무것도 안 보인다고 보고.
+원인 확인: `build_wikijs_pages.py`가 `dho/<category>/<item_id>` 낱개 페이지만 생성하고,
+이를 연결하는 상위 인덱스 페이지나 Wiki.js Navigation 메뉴는 만든 적이 없었음(원래
+아키텍처(위 "Wiki.js 자체 UI 검색"과 `webapp`의 브라우징 역할 분리)에서 위키 쪽 클릭
+탐색 자체를 설계 범위에 넣지 않았던 게 근본 원인).
+
+추가 요구사항(2026-08-15): 사용자가 `webapp`엔 넣을 수 없는 자유 형식 정보(게임 팁,
+공략 등)를 위키에 직접 작성하고 싶어함 — 이 글들도 chat 검색(`semantic_search_wiki`)
+결과에 반영되어야 함. 확인 결과 `build_wiki_chunks.py`는 이미 `wikidb.pages` 전체를
+경로 제한 없이 읽어(`dho/` 접두어 필터 없음) 청킹·임베딩하므로 **추가 구현 없이도 이미
+지원됨** — `page_path`가 `dho/<category>/<item_id>` 패턴이면 grounding, 아니면
+category/item_id NULL로 청크 텍스트 자체가 근거가 되는 구조(`chat/lib/dho-db.ts`의
+`semanticSearchWiki()`도 NULL을 이미 처리). 이번 Phase는 "클릭해서 찾아 들어가기"
+경로만 새로 만들면 됨.
+
+- **인덱스 페이지**: `build_wikijs_pages.py`에 최상위 `dho`(대분류→카테고리 목록) +
+  카테고리별 `dho/<category>`(항목 목록) 인덱스 페이지 생성 추가. `category_localization`의
+  group_title_ko/group_order/order_in_group을 그대로 재사용(웹앱 홈 화면 그룹핑과 동일 소스).
+- **자유 문서 진입점**: `guides`라는 빈 stub 페이지를 하나 만들어서 사용자가 팁/공략 글을
+  그 아래(`guides/...`)에 자유롭게 쓸 수 있는 앵커를 제공. 청킹은 경로 무관하게 이미 동작.
+- **Navigation 자동 등록**: Wiki.js GraphQL에 `navigation.tree`(조회)/`navigation.updateTree`
+  (갱신, locale별 트리 통째 교체) API가 있는 것을 introspection으로 확인 — 기존 트리를 읽어
+  "DHO"(`/dho`)와 "가이드"(`/guides`) 항목이 없으면 추가하는 방식으로 멱등하게 구현(관리자
+  수동 설정 단계 불필요).
+
+## Phase 5 — 링크 도우미 `/link/<이름>` (2026-08-16)
+
+사용자가 Wiki.js 문서(특히 Phase 4에서 추가한 `guides/` 자유 문서)를 손으로 쓸 때
+DHO 항목으로 링크를 걸기 어렵다고 보고 — 정확한 `dho/<category>/<item_id>` 경로를
+몰라서 매번 웹앱/위키 검색으로 찾아야 했음. 조사 결과 Wiki.js 자체엔 제목만으로
+링크를 자동 매핑해주는 기능이 없음(공식 피드백 보드에 "Auto link creation"/"Link to
+title"/"Autocomplete links" 등으로 여러 건 올라와 있으나 전부 미해결 요청 — 정식
+기능 아님). 커스텀 마크다운 문법(`[link:이름]`)은 Wiki.js 마크다운 파서를 직접
+확장해야 해서 배보다 배꼽이 커, 표준 마크다운 링크 `[텍스트](/link/이름)`로 우회하는
+방식을 사용자와 합의.
+
+- **리졸버**: `dho_webapp.py`에 `/link/<name>` 라우트 추가. `items_core`에서
+  `COALESCE(name, title) = name`으로 정확 매칭(검색 페이지의 기존 name/title 폴백
+  관례와 동일하게 유지). 매칭 1건이면 해당 Wiki.js 문서로 302 리다이렉트, 여러
+  건이면(같은 이름이 다른 카테고리에도 있는 경우) 정확히 일치하는 문서 목록을 보여주고
+  고르게 함(원 요청이었던 "정확히 매핑되는 문서 목록"이 이 분기), 0건이면 안내 메시지.
+- **공개 URL 분리**: 리다이렉트는 서버가 아니라 사용자 브라우저에서 일어나므로,
+  스크립트용 내부 주소(`WIKIJS_URL`)와 별개로 브라우저가 실제로 접속 가능한 주소가
+  필요 — 새 env var `WIKIJS_PUBLIC_URL` 추가(`.env.example`). Wiki.js는 chat(`/chat`
+  경로, nginx 리버스프록시로 webapp과 같은 origin)과 달리 별도 포트(3001)로 떠 있어
+  상대경로로 못 묶고 절대 URL이 필수 — NAS 배포 시 실제 접속 주소로 사용자가 직접
+  채워야 함(로컬 기본값은 `http://localhost:3001`).

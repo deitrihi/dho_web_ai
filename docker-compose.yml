@@ -8,6 +8,9 @@
 #   읽기 전용으로 조회한다. API 키/URL은 .env 파일(OPENAI_* 변수, git에는 커밋하지 말 것)에서
 #   읽어온다. 서버 에러는 named volume(chat_logs)에 JSONL로 기록되고 /chat/logs 페이지에서
 #   조회 가능(컨테이너 재시작/재배포에도 유지됨).
+# - wikijs: DHO 데이터를 문서화하는 위키(requarks/wiki 2.x). postgres 안 별도 DB(wikidb)를
+#   쓴다(DHO 구조화 데이터와 스키마 분리). ADMIN_EMAIL/ADMIN_PASS로 최초 기동 시 설치
+#   마법사 없이 관리자 계정을 자동 생성한다(Wiki.js 공식 지원 env var).
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -62,8 +65,32 @@ services:
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL}
+      - DEEPSEEK_API_BASE_URL=${DEEPSEEK_API_BASE_URL}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL}
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - DHO_CHAT_LOG_PATH=/data/logs/errors.jsonl
+    env_file:
+      - .env
+
+  wikijs:
+    image: ghcr.io/requarks/wiki:2
+    container_name: dho-wikijs
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      - DB_TYPE=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASS=${POSTGRES_PASSWORD}
+      - DB_NAME=${WIKI_DB_NAME}
+      - ADMIN_EMAIL=${WIKI_ADMIN_EMAIL}
+      - ADMIN_PASS=${WIKI_ADMIN_PASS}
     env_file:
       - .env
 

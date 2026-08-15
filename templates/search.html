@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{% if q %}"{{ q }}" 검색 결과{% else %}검색{% endif %} - DHO 아카이브 미러{% endblock %}
+{% block breadcrumb %}
+  <li class="breadcrumb-item active" aria-current="page">검색{% if q %}: {{ q }}{% endif %}</li>
+{% endblock %}
+{% block content %}
+  {% if not q %}
+    <div class="card">
+      <div class="card-body text-body-secondary">검색어를 입력하세요.</div>
+    </div>
+  {% elif not results.groups %}
+    <div class="card">
+      <div class="card-body text-body-secondary">"{{ q }}"에 대한 검색 결과가 없습니다.</div>
+    </div>
+  {% else %}
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <h1 class="h5 mb-0 flex-grow-1">"{{ q }}" 검색 결과</h1>
+        <span class="badge text-bg-secondary">{{ results.total }}건</span>
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2">
+          {% for g in results.groups %}
+            <span class="badge text-bg-light border">{{ g.category_label }} <span class="text-body-secondary">{{ g.count }}</span></span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% for g in results.groups %}
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center gap-2">
+          <h2 class="h6 mb-0 flex-grow-1">{{ g.category_label }}</h2>
+          <span class="badge text-bg-secondary">{{ g.count }}건</span>
+        </div>
+        <div class="list-group list-group-flush">
+          {% for it in g.entries %}
+            <a class="list-group-item list-group-item-action" href="{{ url_for('item_detail', category=g.category, item_id=it.item_id) }}">{{ it.name }}</a>
+          {% endfor %}
+          {% if g.more > 0 %}
+            <div class="list-group-item small fst-italic text-body-secondary">외 {{ g.more }}건 더</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endblock %}

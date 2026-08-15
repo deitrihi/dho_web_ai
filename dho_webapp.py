@@ -34,6 +34,23 @@ def _q(identifier: str) -> str:
 DATABASE_URL = os.environ["DATABASE_URL"]
 PER_PAGE = 100
 
+# search_group_order: 검색 결과 카테고리를 묶는 대분류(모험/아이템/선박/...) 표시 순서를
+# 사용자가 /settings에서 커스터마이징한 값만 담는 테이블. category_localization(원본 사이트
+# JS 번들에서 옮겨온 "사실 데이터" 레이어, migrate_to_postgres.py가 1회성으로 이관)과 분리해서
+# 사용자 설정이 크롤링 데이터 갱신에 영향받지 않게 한다. 크롤링 파이프라인
+# (DERIVED_PIPELINE_SCRIPTS)과 무관한 앱 설정값이라 재생성 스크립트에도 안 넣는다.
+with psycopg.connect(DATABASE_URL, autocommit=True) as _init_conn:
+    _init_conn.execute(
+        "CREATE TABLE IF NOT EXISTS search_group_order "
+        "(group_title TEXT PRIMARY KEY, sort_order INTEGER NOT NULL)"
+    )
+    # 대분류 안 소분류(카테고리) 순서 오버레이. 카테고리가 속한 대분류는 category_localization
+    # 조인으로 알아내므로 여기엔 중복 저장하지 않는다.
+    _init_conn.execute(
+        "CREATE TABLE IF NOT EXISTS search_category_order "
+        "(category TEXT PRIMARY KEY, sort_order INTEGER NOT NULL)"
+    )
+
 # chat/ 챗봇의 실제 접속 주소. 외부에서는 도메인 443 하나로만 들어오고, nginx가 그 안에서
 # "/"는 webapp:5050으로, "/chat"은 chat:3000으로 나눠서 프록시해준다 — 즉 브라우저 입장에서
 # webapp과 chat은 이미 같은 origin(도메인+443)에 있으므로, 기본값은 상대경로 "/chat"이면
@@ -42,6 +59,12 @@ PER_PAGE = 100
 # IP:5050으로 직접 접속) 상대경로가 webapp 자신의 포트로 풀려버려 안 통하므로, 그럴 때만
 # DHO_CHAT_URL=http://<host>:3000/chat 처럼 절대경로로 오버라이드해서 확인한다.
 CHAT_URL = os.environ.get("DHO_CHAT_URL", "/chat")
+
+# Wiki.js 문서 안에서 `[표시텍스트](/link/이름)` 형태로 쓰면 실제 카테고리/item_id 경로를
+# 몰라도 이름만으로 링크를 걸 수 있게 해주는 리졸버(/link/<name>)가 리다이렉트할 때 쓰는
+# Wiki.js 주소. wikijs는 chat과 달리 별도 포트(3001)로 떠 있어 상대경로로 못 묶으므로
+# CHAT_URL과 달리 절대 URL이 필수.
+WIKIJS_PUBLIC_URL = os.environ.get("WIKIJS_PUBLIC_URL", "http://localhost:3001")
 
 app = Flask(__name__)
 # {% %} 블록 태그 주변 개행/들여쓰기를 렌더링 결과에 안 남기게 함. 안 그러면 표 셀/속성값에
@@ -295,6 +318,241 @@ def chat_ai():
     # 페이지는 "chat"과 무관한 "/assistant"에 두고, 안의 iframe만 CHAT_URL("/chat")을
     # 가리키게 한다.
     return render_template("chat.html", chat_url=CHAT_URL)
+
+
+SEARCH_PER_CATEGORY = 30  # get_backlinks()와 동일한 패턴 — 흔한 검색어는 카테고리당
+# 수백 건씩 나올 수 있어 상위 N건만 보여주고 나머지는 개수만 표시
+
+
+def get_search_group_order(db: psycopg.Connection) -> list[str]:
+    """검색 결과에서 카테고리를 묶는 대분류 표시 순서. /settings에서 사용자가 저장한
+    값이 있으면 그걸 쓰고, 없으면(최초 상태) category_localization의 기본 순서
+    (사이드바 내비게이션과 동일한 순서)로 폴백한다."""
+    custom = db.execute("SELECT group_title FROM search_group_order ORDER BY sort_order").fetchall()
+    if custom:
+        return [r["group_title"] for r in custom]
+    default = db.execute(
+        "SELECT group_title_ko, MIN(group_order) AS go FROM category_localization "
+        "GROUP BY group_title_ko ORDER BY go"
+    ).fetchall()
+    return [r["group_title_ko"] for r in default]
+
+
+def get_effective_category_order(db: psycopg.Connection, group_title: str) -> list[str]:
+    """대분류 하나(group_title) 안에서 카테고리(소분류) 표시 순서. /settings에서 저장한
+    커스텀 순서가 있으면 그걸, 없으면 category_localization의 기본 순서(order_in_group)를
+    반환한다. 설정 페이지 초기 표시값과 move-category의 스왑 대상 목록으로 함께 쓰인다."""
+    custom = db.execute(
+        "SELECT sco.category FROM search_category_order sco "
+        "JOIN category_localization cl ON cl.slug = sco.category "
+        "WHERE cl.group_title_ko = %s ORDER BY sco.sort_order",
+        (group_title,),
+    ).fetchall()
+    if custom:
+        return [r["category"] for r in custom]
+    default = db.execute(
+        "SELECT slug FROM category_localization WHERE group_title_ko = %s ORDER BY order_in_group",
+        (group_title,),
+    ).fetchall()
+    return [r["slug"] for r in default]
+
+
+def get_customized_search_groups(db: psycopg.Connection) -> set[str]:
+    """소분류 순서를 한 번이라도 저장한 적 있는 대분류 집합. 검색 결과 정렬에서
+    이 집합에 속한 대분류는 커스텀 순서를, 그 외에는 기존처럼 매칭 건수 내림차순을
+    쓴다 — 대분류별로 "커스텀 고정 순서" 아니면 "건수순" 둘 중 하나만 적용해서 부분
+    커스텀으로 순서가 헷갈리는 상황을 피한다."""
+    rows = db.execute(
+        "SELECT DISTINCT cl.group_title_ko FROM search_category_order sco "
+        "JOIN category_localization cl ON cl.slug = sco.category"
+    ).fetchall()
+    return {r["group_title_ko"] for r in rows}
+
+
+def get_search_results(db: psycopg.Connection, q: str) -> dict:
+    """items_search(챗봇용으로 이미 구축된 pg_trgm 인덱스 테이블)를 ILIKE로 조회해서
+    카테고리별로 묶는다. name/title뿐 아니라 description/raw_attrs 속성값까지 포함된
+    search_text를 대상으로 하므로 챗봇 검색과 결과가 일관된다. 카테고리 그룹(대분류)
+    표시 순서는 get_search_group_order()를 따른다. 같은 그룹 안에서는 사용자가
+    소분류 순서를 커스터마이징한 적 있으면 그 순서를, 아니면 매칭 건수 내림차순을
+    쓴다."""
+    pattern = f"%{q}%"
+    counts = db.execute(
+        "SELECT s.category, COUNT(*) AS cnt, cl.group_title_ko FROM items_search s "
+        "LEFT JOIN category_localization cl ON cl.slug = s.category "
+        "WHERE s.search_text ILIKE %s GROUP BY s.category, cl.group_title_ko",
+        (pattern,),
+    ).fetchall()
+    if not counts:
+        return {"groups": [], "total": 0}
+
+    group_rank = {title: i for i, title in enumerate(get_search_group_order(db))}
+    customized_groups = get_customized_search_groups(db)
+    category_rank_cache: dict[str, dict[str, int]] = {}
+
+    def within_group_key(c):
+        group = c["group_title_ko"]
+        if group in customized_groups:
+            if group not in category_rank_cache:
+                category_rank_cache[group] = {
+                    cat: i for i, cat in enumerate(get_effective_category_order(db, group))
+                }
+            ranks = category_rank_cache[group]
+            return ranks.get(c["category"], len(ranks))
+        return -c["cnt"]
+
+    counts.sort(key=lambda c: (group_rank.get(c["group_title_ko"], len(group_rank)), within_group_key(c)))
+
+    groups = []
+    total = 0
+    for c in counts:
+        category = c["category"]
+        cnt = c["cnt"]
+        total += cnt
+        items = db.execute(
+            "SELECT item_id, name, title FROM items_search "
+            "WHERE category = %s AND search_text ILIKE %s ORDER BY item_id LIMIT %s",
+            (category, pattern, SEARCH_PER_CATEGORY),
+        ).fetchall()
+        groups.append(
+            {
+                "category": category,
+                "category_label": get_category_label(db, category),
+                "count": cnt,
+                "entries": [
+                    {"item_id": it["item_id"], "name": it["name"] or it["title"] or it["item_id"]}
+                    for it in items
+                ],
+                "more": cnt - len(items),
+            }
+        )
+    return {"groups": groups, "total": total}
+
+
+@app.route("/search")
+def search():
+    db = get_db()
+    q = request.args.get("q", "").strip()
+    results = get_search_results(db, q) if q else {"groups": [], "total": 0}
+    return render_template("search.html", q=q, results=results)
+
+
+def get_link_matches(db: psycopg.Connection, name: str) -> list[dict]:
+    """이름이 정확히 일치하는 항목을 전부 찾는다. get_search_results()와 동일하게
+    name이 비어있는 카테고리는 title로 대신 매칭한다."""
+    return db.execute(
+        "SELECT category, item_id, COALESCE(name, title) AS display_name FROM items_core "
+        "WHERE COALESCE(name, title) = %s ORDER BY category, item_id",
+        (name,),
+    ).fetchall()
+
+
+@app.route("/link/<name>")
+def link_resolver(name):
+    """Wiki.js 문서에서 `[표시텍스트](/link/이름)`으로 쓰면 정확한 카테고리/item_id
+    경로를 몰라도 항목 이름만으로 해당 Wiki.js 문서로 이동할 수 있게 해주는 리졸버.
+    매칭이 1건이면 바로 리다이렉트하고, 여러 건(같은 이름이 다른 카테고리에도 있는 경우)
+    또는 0건이면 목록/안내 페이지를 보여준다."""
+    db = get_db()
+    matches = get_link_matches(db, name)
+    if len(matches) == 1:
+        m = matches[0]
+        return redirect(f"{WIKIJS_PUBLIC_URL}/ko/dho/{m['category']}/{m['item_id']}")
+    return render_template(
+        "link_result.html",
+        name=name,
+        matches=[
+            {
+                "category": m["category"],
+                "category_label": get_category_label(db, m["category"]),
+                "item_id": m["item_id"],
+                "display_name": m["display_name"],
+                "wiki_url": f"{WIKIJS_PUBLIC_URL}/ko/dho/{m['category']}/{m['item_id']}",
+            }
+            for m in matches
+        ],
+    )
+
+
+@app.route("/settings")
+def settings():
+    db = get_db()
+    customized_groups = get_customized_search_groups(db)
+    groups = []
+    for title in get_search_group_order(db):
+        labels = {
+            r["slug"]: r["label_ko"]
+            for r in db.execute(
+                "SELECT slug, label_ko FROM category_localization WHERE group_title_ko = %s", (title,)
+            ).fetchall()
+        }
+        categories = [
+            {"slug": slug, "label": labels.get(slug, slug)}
+            for slug in get_effective_category_order(db, title)
+        ]
+        groups.append({"title": title, "categories": categories, "customized": title in customized_groups})
+    return render_template("settings.html", groups=groups)
+
+
+@app.route("/settings/move-group", methods=["POST"])
+def settings_move_group():
+    db = get_db()
+    order = get_search_group_order(db)
+    title = request.form.get("group_title")
+    direction = request.form.get("direction")
+    if title in order:
+        i = order.index(title)
+        j = i - 1 if direction == "up" else i + 1
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+
+    wdb = get_write_db()
+    try:
+        wdb.execute("DELETE FROM search_group_order")
+        for idx, t in enumerate(order):
+            wdb.execute(
+                "INSERT INTO search_group_order (group_title, sort_order) VALUES (%s, %s)", (t, idx)
+            )
+        wdb.commit()
+    finally:
+        wdb.close()
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/move-category", methods=["POST"])
+def settings_move_category():
+    db = get_db()
+    category = request.form.get("category")
+    direction = request.form.get("direction")
+    row = db.execute(
+        "SELECT group_title_ko FROM category_localization WHERE slug = %s", (category,)
+    ).fetchone()
+    if row is None:
+        abort(404)
+    group_title = row["group_title_ko"]
+
+    order = get_effective_category_order(db, group_title)
+    if category in order:
+        i = order.index(category)
+        j = i - 1 if direction == "up" else i + 1
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+
+    wdb = get_write_db()
+    try:
+        wdb.execute(
+            "DELETE FROM search_category_order WHERE category IN "
+            "(SELECT slug FROM category_localization WHERE group_title_ko = %s)",
+            (group_title,),
+        )
+        for idx, cat in enumerate(order):
+            wdb.execute(
+                "INSERT INTO search_category_order (category, sort_order) VALUES (%s, %s)", (cat, idx)
+            )
+        wdb.commit()
+    finally:
+        wdb.close()
+    return redirect(url_for("settings"))
 
 
 LIST_MAX_COLS = 7

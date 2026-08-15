@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}설정 - DHO 아카이브 미러{% endblock %}
+{% block breadcrumb %}
+  <li class="breadcrumb-item active" aria-current="page">설정</li>
+{% endblock %}
+{% block content %}
+  <div class="card">
+    <div class="card-header">
+      <h1 class="h5 mb-0">검색 결과 정렬 순서</h1>
+    </div>
+    <div class="card-body">
+      <p class="text-body-secondary small">
+        검색 결과를 카테고리별로 묶어 보여줄 때, 대분류와 그 안의 소분류(카테고리) 순서를
+        정합니다. 대분류를 펼치면 소분류 목록이 나옵니다 — 소분류 순서를 한 번도 바꾸지
+        않은 대분류는 지금처럼 매칭 건수가 많은 순으로 정렬되고, 순서를 조정하면 그때부터는
+        그 순서를 그대로 따릅니다.
+      </p>
+      <div class="accordion" id="settings-accordion">
+        {% for group in groups %}
+          <div class="accordion-item">
+            <h2 class="accordion-header d-flex align-items-center">
+              <button class="accordion-button collapsed flex-grow-1" type="button"
+                      data-bs-toggle="collapse" data-bs-target="#settings-group-{{ loop.index }}">
+                {{ loop.index }}. {{ group.title }}
+                {% if group.customized %}<span class="badge text-bg-info ms-2">소분류 순서 지정됨</span>{% endif %}
+              </button>
+              <span class="d-flex gap-1 px-2">
+                <form method="post" action="{{ url_for('settings_move_group') }}">
+                  <input type="hidden" name="group_title" value="{{ group.title }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.first %}disabled{% endif %}>▲</button>
+                </form>
+                <form method="post" action="{{ url_for('settings_move_group') }}">
+                  <input type="hidden" name="group_title" value="{{ group.title }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.last %}disabled{% endif %}>▼</button>
+                </form>
+              </span>
+            </h2>
+            <div id="settings-group-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#settings-accordion">
+              <div class="accordion-body p-0">
+                <ol class="list-group list-group-numbered list-group-flush">
+                  {% for c in group.categories %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      {{ c.label }}
+                      <span class="d-flex gap-1">
+                        <form method="post" action="{{ url_for('settings_move_category') }}">
+                          <input type="hidden" name="category" value="{{ c.slug }}">
+                          <input type="hidden" name="direction" value="up">
+                          <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.first %}disabled{% endif %}>▲</button>
+                        </form>
+                        <form method="post" action="{{ url_for('settings_move_category') }}">
+                          <input type="hidden" name="category" value="{{ c.slug }}">
+                          <input type="hidden" name="direction" value="down">
+                          <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.last %}disabled{% endif %}>▼</button>
+                        </form>
+                      </span>
+                    </li>
+                  {% endfor %}
+                </ol>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endblock %}

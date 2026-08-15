@@ -1,91 +1,92 @@
 {% extends "base.html" %}
 {% block title %}{{ item['name'] or item['title'] }} - DHO 아카이브 미러{% endblock %}
 {% block breadcrumb %}
-  <span class="sep">›</span>
-  {% if group_title %}<span class="crumb">{{ group_title }}</span><span class="sep">›</span>{% endif %}
-  <a class="crumb" href="{{ url_for('category_list', category=item['category']) }}">{{ category_label }}</a>
-  <span class="sep">›</span>
-  <span class="crumb current">{{ item['name'] or item['title'] }}</span>
+  {% if group_title %}<li class="breadcrumb-item">{{ group_title }}</li>{% endif %}
+  <li class="breadcrumb-item"><a href="{{ url_for('category_list', category=item['category']) }}">{{ category_label }}</a></li>
+  <li class="breadcrumb-item active" aria-current="page">{{ item['name'] or item['title'] }}</li>
 {% endblock %}
 {% block content %}
-  <section class="card">
-    <header class="card-head">
-      <h1>{{ item['name'] or item['title'] }}</h1>
-      <span class="badge-tag">{{ category_label }}</span>
-      <a class="btn-add-row" href="{{ url_for('item_edit', category=item['category'], item_id=item['item_id']) }}">수정</a>
-    </header>
-
-    {% if item['description'] %}
-      <p class="description">{{ item['description'] }}</p>
-    {% endif %}
-
-    {% if rows %}
-      <div class="row-list">
-        {% for r in rows %}
-          <div class="row">
-            <div class="row-label">{{ r.label if r.type == 'attr' else r.heading }}</div>
-            <div class="row-value">
-              {%- if r.type == 'attr' %}
-                {{- r.text | with_links(r.links) -}}
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center gap-2">
+      <h1 class="h5 mb-0 flex-grow-1">{{ item['name'] or item['title'] }}</h1>
+      <span class="badge text-bg-secondary">{{ category_label }}</span>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('item_edit', category=item['category'], item_id=item['item_id']) }}">수정</a>
+    </div>
+    <div class="card-body">
+      {% if item['description'] %}
+        <p class="text-body-secondary">{{ item['description'] }}</p>
+      {% endif %}
+      {% if rows %}
+        <dl class="row mb-0">
+          {% for r in rows %}
+            {% if r.type == 'attr' %}
+              <dt class="col-sm-3 col-lg-2 border-top py-2">{{ r.label }}</dt>
+              <dd class="col-sm-9 col-lg-10 border-top py-2 mb-0">
+                <p class="value-text mb-0">{{ r.text | with_links(r.links) }}</p>
                 {% if r.images %}
-                  <div class="row-images">
+                  <div class="d-flex flex-wrap gap-3 mt-2">
                     {% for img in r.images %}
-                      <figure>
-                        <img src="{{ img.src }}" alt="{{ img.alt }}" loading="lazy">
-                        {% if img.caption %}<figcaption>{{ img.caption }}</figcaption>{% endif %}
+                      <figure class="mb-0">
+                        <img src="{{ img.src }}" alt="{{ img.alt }}" loading="lazy" class="img-fluid rounded" style="max-height: 240px;">
+                        {% if img.caption %}<figcaption class="small text-body-secondary mt-1">{{ img.caption }}</figcaption>{% endif %}
                       </figure>
                     {% endfor %}
                   </div>
                 {% endif %}
-              {%- else -%}
-                <div class="table-scroll">
-                  <table>
-                    <thead>
+              </dd>
+            {% else %}
+              <dt class="col-12 border-top py-2">{{ r.heading }}</dt>
+              <dd class="col-12 mb-0">
+                <div class="table-responsive">
+                  <table class="table table-bordered table-sm mb-0">
+                    <thead class="table-light">
                       <tr>{% for h in r.headers %}<th>{{ h }}</th>{% endfor %}</tr>
                     </thead>
                     <tbody>
                       {% for row in r.rows %}
                         <tr>
                           {% for cell in row %}
-                            <td>{{ cell.text | with_links(cell.links) }}</td>
+                            <td class="value-text">{{ cell.text | with_links(cell.links) }}</td>
                           {% endfor %}
                         </tr>
                       {% endfor %}
                     </tbody>
                   </table>
                 </div>
-              {%- endif -%}
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-    {% endif %}
-  </section>
+              </dd>
+            {% endif %}
+          {% endfor %}
+        </dl>
+      {% endif %}
+    </div>
+  </div>
 
   {% if backlinks.groups %}
-    <section class="card">
-      <header class="card-head">
-        <h2>이 항목을 참조하는 곳</h2>
-        <span class="count">{{ backlinks.total }}건</span>
-      </header>
-      <div class="backlink-badges">
-        {% for g in backlinks.groups %}
-          <span class="badge">{{ g.category_label }}<span class="badge-count">{{ g.count }}</span></span>
-        {% endfor %}
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <h2 class="h6 mb-0 flex-grow-1">이 항목을 참조하는 곳</h2>
+        <span class="badge text-bg-secondary">{{ backlinks.total }}건</span>
       </div>
-      <ul class="backlink-list">
-        {% for g in backlinks.groups %}
-          {% for it in g.entries %}
-            <li>
-              <a href="{{ url_for('item_detail', category=g.category, item_id=it.item_id) }}">{{ it.name }}</a>
-              <span class="backlink-context">{{ g.category_label }} › {{ it.label }}</span>
-            </li>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          {% for g in backlinks.groups %}
+            <span class="badge text-bg-light border">{{ g.category_label }} <span class="text-body-secondary">{{ g.count }}</span></span>
           {% endfor %}
-          {% if g.more > 0 %}
-            <li class="backlink-more">{{ g.category_label }} 외 {{ g.more }}건 더</li>
-          {% endif %}
-        {% endfor %}
-      </ul>
-    </section>
+        </div>
+        <div class="row row-cols-1 row-cols-md-2 g-1">
+          {% for g in backlinks.groups %}
+            {% for it in g.entries %}
+              <div class="col small text-truncate">
+                <a href="{{ url_for('item_detail', category=g.category, item_id=it.item_id) }}">{{ it.name }}</a>
+                <span class="text-body-secondary">{{ g.category_label }} › {{ it.label }}</span>
+              </div>
+            {% endfor %}
+            {% if g.more > 0 %}
+              <div class="col small fst-italic text-body-secondary">{{ g.category_label }} 외 {{ g.more }}건 더</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
   {% endif %}
 {% endblock %}

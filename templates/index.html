@@ -3,20 +3,23 @@
 {% block breadcrumb_bar %}{% endblock %}
 {% block content %}
   {% for group in groups %}
-    <section class="card category-group">
-      <header class="card-head">
-        <h2>{{ group.title }}</h2>
-      </header>
-      <ul class="category-grid">
-        {% for c in group.categories %}
-          <li>
-            <a href="{{ url_for('category_list', category=c.slug) }}">
-              {{ c.label }}
-            </a>
-            <span class="count">{{ c.cnt }}</span>
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
+    <div class="card mb-3">
+      <div class="card-header">
+        <h2 class="h6 mb-0">{{ group.title }}</h2>
+      </div>
+      <div class="card-body">
+        <div class="row row-cols-2 row-cols-sm-3 row-cols-md-4 row-cols-lg-5 g-2">
+          {% for c in group.categories %}
+            <div class="col">
+              <a class="d-flex justify-content-between align-items-center px-2 py-1 rounded text-decoration-none link-body-emphasis hover-bg"
+                 href="{{ url_for('category_list', category=c.slug) }}">
+                <span>{{ c.label }}</span>
+                <span class="badge text-bg-secondary rounded-pill">{{ c.cnt }}</span>
+              </a>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
   {% endfor %}
 {% endblock %}

@@ -1,30 +1,29 @@
 {% extends "base.html" %}
 {% block title %}{{ category_label }} - DHO 아카이브 미러{% endblock %}
 {% block breadcrumb %}
-  <span class="sep">›</span>
-  {% if group_title %}<span class="crumb">{{ group_title }}</span><span class="sep">›</span>{% endif %}
-  <span class="crumb current">{{ category_label }}</span>
+  {% if group_title %}<li class="breadcrumb-item">{{ group_title }}</li>{% endif %}
+  <li class="breadcrumb-item active" aria-current="page">{{ category_label }}</li>
 {% endblock %}
 {% block content %}
-  <section class="card">
-    <header class="card-head">
-      <h1>{{ category_label }}</h1>
-      <span class="count">{{ total }}건</span>
-      <a class="btn-add-row" href="{{ url_for('item_new', category=category) }}">+ 새 항목 추가</a>
-    </header>
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-2">
+      <h1 class="h5 mb-0 flex-grow-1">{{ category_label }}</h1>
+      <span class="badge text-bg-secondary">{{ total }}건</span>
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('item_new', category=category) }}">+ 새 항목 추가</a>
+    </div>
     {% if columns %}
-      <div class="table-scroll">
-        <table class="list-table">
-          <thead>
+      <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0 align-middle">
+          <thead class="table-light">
             <tr>
               <th>
-                <a href="?sort=name&dir={{ 'desc' if sort == 'name' and dir == 'asc' else 'asc' }}">
+                <a class="text-decoration-none text-reset d-block" href="?sort=name&dir={{ 'desc' if sort == 'name' and dir == 'asc' else 'asc' }}">
                   이름{% if sort == 'name' %} {{ '▲' if dir == 'asc' else '▼' }}{% endif %}
                 </a>
               </th>
               {% for c in columns %}
                 <th>
-                  <a href="?sort={{ c.label }}&dir={{ 'desc' if sort == c.label and dir == 'asc' else 'asc' }}">
+                  <a class="text-decoration-none text-reset d-block" href="?sort={{ c.label }}&dir={{ 'desc' if sort == c.label and dir == 'asc' else 'asc' }}">
                     {{ c.label }}{% if sort == c.label %} {{ '▲' if dir == 'asc' else '▼' }}{% endif %}
                   </a>
                 </th>
@@ -48,17 +47,15 @@
         </table>
       </div>
     {% else %}
-      <ul class="item-list">
+      <div class="list-group list-group-flush">
         {% for it in items %}
-          <li>
-            <a href="{{ url_for('item_detail', category=category, item_id=it['item_id']) }}">
-              {{ it['name'] or it['title'] or it['item_id'] }}
-            </a>
-          </li>
+          <a class="list-group-item list-group-item-action" href="{{ url_for('item_detail', category=category, item_id=it['item_id']) }}">
+            {{ it['name'] or it['title'] or it['item_id'] }}
+          </a>
         {% endfor %}
-      </ul>
+      </div>
     {% endif %}
-    <nav class="pager">
+    <div class="card-footer d-flex align-items-center gap-3 small">
       {% if page > 1 %}
         <a href="?page={{ page - 1 }}&sort={{ sort }}&dir={{ dir }}">« 이전</a>
       {% endif %}
@@ -66,6 +63,6 @@
       {% if page < total_pages %}
         <a href="?page={{ page + 1 }}&sort={{ sort }}&dir={{ dir }}">다음 »</a>
       {% endif %}
-    </nav>
-  </section>
+    </div>
+  </div>
 {% endblock %}

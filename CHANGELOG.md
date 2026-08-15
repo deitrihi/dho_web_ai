@@ -1,5 +1,110 @@
 # CHANGELOG
 
+## [미커밋]
+
+- `dho_webapp.py`/`.env.example`/`templates/link_result.html` — Wiki.js 문서 안에서
+  `[텍스트](/link/이름)`으로 쓰면 정확한 `dho/<category>/<item_id>` 경로 없이 항목 이름만
+  으로 링크를 걸 수 있는 리졸버 `/link/<name>` 추가. `items_core`에서 이름이 정확히
+  일치하는 항목을 찾아 1건이면 해당 Wiki.js 문서로 302 리다이렉트, 여러 건이면(카테고리
+  간 이름 중복) 목록을 보여주고 고르게 함, 0건이면 안내 메시지. 브라우저가 직접 접속할
+  Wiki.js 주소가 필요해 기존 내부용 `WIKIJS_URL`과 분리한 `WIKIJS_PUBLIC_URL` env var
+  신규 추가(NAS 배포 시 실제 접속 주소로 채워야 함). 로컬 컨테이너에서 유일/복수/무매칭
+  3가지 케이스 실측 검증 완료.
+
+- Wiki.js 홈페이지를 `/dho` 리다이렉트 대신 정적 2-링크 페이지(DHO 아카이브/가이드)로
+  전환 — 사용자가 리다이렉트 방식을 원치 않아 방향 전환. `scriptJs`(리다이렉트) 제거,
+  좌측 Navigation 사이드바는 홈 전용 `scriptCss`(`.v-navigation-drawer{display:none}` +
+  `.v-main` padding 보정)로 홈에서만 숨김(위키 전체 아님 — `navigation.updateConfig`는
+  사이트 전체 설정이라 페이지별 옵션 없음을 Wiki.js 프론트엔드 소스 확인으로 결론).
+  로컬+NAS 둘 다 적용, DB 반영 확인 — 실제 브라우저 렌더링(여백 등)은 사용자 확인 필요.
+
+- `build_wikijs_pages.py` — 위키 홈/사이드바가 비어 보이던 문제 해결. 대분류별 카테고리
+  목록을 담은 루트 인덱스(`dho`)와 카테고리별 항목 목록 인덱스(`dho/<category>`) 생성
+  로직 추가, 자유 형식 가이드/팁 문서용 `guides` stub 페이지 추가, Wiki.js GraphQL
+  `navigation.updateTree`로 사이드바에 "DHO 아카이브"/"가이드 / 팁" 링크 자동 등록(기존
+  항목 보존하는 멱등 로직). 자유 위키 문서가 chat 검색에 반영되는지도 확인 —
+  `build_wiki_chunks.py`가 이미 경로 제한 없이 전체 페이지를 청킹해서 별도 구현 불필요함을
+  확인. 로컬 검증: 홈 → DHO 아카이브 → 카테고리 → 항목 클릭 탐색 전부 200 확인. 전체 70개
+  카테고리 인덱스 백필 완료(실패 0건).
+- `build_wikijs_pages.py` — em dash(—)가 Windows 콘솔 기본 코드페이지(cp949)에서 인코딩
+  안 돼 마지막 요약 출력 시 `UnicodeEncodeError`로 죽던 기존 버그 수정. import 직후
+  `sys.stdout`/`sys.stderr`를 UTF-8로 reconfigure.
+- Wiki.js 첫 화면("Welcome to your wiki")을 없애고 "/"를 `/dho`로 이동시킴. Wiki.js GraphQL
+  스키마 전체를 뒤져봤지만 "홈페이지 경로" 같은 사이트 설정은 없어서, `path="home"` 페이지에
+  공식 지원 필드 `scriptJs`(페이지별 커스텀 JS)로 `window.location.replace('/dho')` 실행.
+  처음엔 `path=""`에 만들었다가 계속 welcome 화면이 떠서, Wiki.js 소스(`server/helpers/
+  page.js`)를 직접 읽어 "/"는 내부적으로 `path=""`가 아니라 `path="home"`으로 변환돼 조회됨을
+  확인 → `move` mutation으로 `home`으로 재배치해서 해결(JS 비활성 대비 본문에 `/dho` 링크도
+  같이 넣음). 로컬+NAS 둘 다 적용, `<page path="home">` 렌더링 확인.
+- `build_wikijs_pages.py` — NAS에서 `/dho` 등 접근 시 404가 나던 진짜 원인은 namespacing이
+  아니라 "사이트 기본 locale(ko)"과 "페이지 locale(en, 하드코딩)" 불일치였음을 확인. 페이지
+  locale을 `ko`로 마이그레이션하는 쪽으로 결정 — 코드의 locale 하드코딩 3곳(`en`→`ko`) 수정,
+  로컬/NAS wikidb의 `pages`/`pageTree`/`pageHistory`/`pageLinks`.`localeCode`와
+  `navigation` 설정 JSON을 `en`→`ko` 일괄 UPDATE, 로컬 사이트 기본 locale도 `ko`로 변경
+  (NAS는 이미 `ko`였음). 양쪽 모두 `/dho`, `/dho/tarotCard/8611`, `/guides` 접두어 없이
+  200 확인.
+
+- `templates/base.html`/`static/style.css` — webapp 사이드바(카테고리 accordion)를 펼쳤을 때
+  목록이 길어지면 스크롤 없이 화면 밖으로 잘리던 버그 수정. 실제 원인은 Bootstrap이 lg
+  이상(992px+)에서 `.offcanvas-lg .offcanvas-body`에 `overflow-y: visible`을 강제하고
+  높이도 안 채워주는 것 — `#sidebar.offcanvas-lg`/`.offcanvas-body`에 `height: 100%` +
+  `overflow-y: auto !important` 오버라이드, 바깥 flex 컨테이너(`.shell-row`)에는
+  `min-height: 0`을 추가해 vh-100 밖으로 안 늘어나게 함. 로컬에서 NAS Postgres에 직접
+  붙여 Flask 개발서버로 재현·검증(Playwright로 스크롤 동작 및 모바일/홈 화면 회귀 없음 확인).
+
+- `dho_webapp.py`/`templates/settings.html` — 설정 페이지에서 대분류 하위 소분류
+  (카테고리) 순서도 지정 가능하도록 확장. 새 테이블 `search_category_order`(대분류와
+  동일한 오버레이 패턴). 대분류 하나라도 소분류 순서를 커스터마이징하면 그 대분류
+  안에서는 저장된 순서를 전적으로 따르고, 손 안 댄 대분류는 기존처럼 매칭 건수
+  내림차순 유지(부분 커스텀 없음, 대분류 단위 on/off). 설정 페이지는 대분류를
+  아코디언으로 펼치면 소분류 목록 + ▲▼ 버튼이 나오는 구조로 변경, 커스터마이징된
+  대분류엔 뱃지 표시.
+- `dho_webapp.py`/`templates/settings.html`/`templates/base.html` — webapp에 설정
+  페이지(`/settings`) 신규. 검색 결과에서 카테고리를 묶는 대분류(모험/아이템/선박/
+  인물·스킬/NPC/세계) 표시 순서를 ▲▼ 버튼으로 직접 정할 수 있음. 새 테이블
+  `search_group_order`(사용자 설정값만 저장, 값 없으면 기존 category_localization
+  기본 순서로 폴백)를 원본 데이터 테이블과 분리해서 크롤링 파이프라인 재생성에
+  영향받지 않게 함. `get_search_results()`는 그룹 순서(설정값) → 그룹 내 매칭
+  건수 내림차순으로 정렬하도록 변경.
+- `templates/*.html`/`static/style.css` — webapp을 커스텀 CSS에서 Bootstrap 5.3(CDN)
+  기반으로 전면 재작성. 사이드바는 offcanvas-lg(데스크톱은 고정, 모바일은 드로어)로
+  교체, 카테고리 그룹은 accordion, 카드/뱃지/표/폼은 Bootstrap 컴포넌트로 교체.
+  다크모드는 기존과 동일하게 OS 설정(prefers-color-scheme) 자동 감지 유지 —
+  `data-bs-theme` 속성을 인라인 스크립트로 설정. 기본 Bootstrap 색상 그대로 사용,
+  수동 다크모드 토글 버튼은 추가 안 함(사용자 확인). `style.css`는 486줄에서 15줄로
+  축소(Bootstrap이 못 담당하는 hover-bg/value-text/chat-frame만 남김). 항목 추가·수정
+  폼의 속성/표 동적 행 추가·삭제 JS는 그대로 유지.
+- `dho_webapp.py`/`templates/search.html`/`templates/base.html`/`static/style.css` —
+  webapp에 검색 기능 추가. `/search?q=` 라우트가 챗봇용으로 이미 구축된 `items_search`
+  (pg_trgm 인덱스) 테이블을 `ILIKE`로 조회, 결과를 카테고리별로 그룹핑(`get_backlinks()`와
+  동일한 카테고리당 상위 N건 + "외 N건 더" 패턴). 상단바에 검색창 추가.
+- `docker-compose.yml`/`postgres/init.sql`/`.env.example` — `wikijs` 서비스 추가
+  (`ghcr.io/requarks/wiki:2`), Postgres 안에 별도 DB(`wikidb`) 생성.
+- `build_wikijs_pages.py` 신규 — DHO 구조화 데이터를 Markdown으로 변환해 Wiki.js GraphQL
+  API로 페이지 생성/갱신(`dho/<category>/<item_id>` 경로), 콘텐츠 해시로 변경분만 갱신.
+- `build_wiki_chunks.py` 신규 — Wiki.js 페이지를 헤더 단위로 청킹해서 pgvector에 임베딩
+  (`wiki_chunks` 테이블), 웹훅 미지원이라 `wikidb.pages.hash` 비교 기반 폴링으로 변경 감지.
+- Wiki.js 파일럿(tarotCard/dungeon)·chat 통합 종단간 검증 완료, 전체 70개 카테고리 확대
+  백그라운드 실행 착수(Phase 3 진행 중, NAS 배포는 미착수).
+- `build_wikijs_pages.py` — 동시 페이지 생성 시 Wiki.js 2.5.314 내부 "rebuild-tree" 작업이
+  깨지는(pageTree 제약조건 위반) 버그를 발견해 실제 쓰기(create/update)만 전역 락으로
+  직렬화하도록 수정. 마크다운 생성(DB 조회)은 계속 병렬 처리.
+- **Phase 3 완료(2026-08-14~15)**: 70개 카테고리 전체(33,496건) Wiki.js 페이지 백필 +
+  125,328개 청크 임베딩 전부 완료. `WIKIJS_REQUEST_TIMEOUT` 환경변수 추가(기본 30초) —
+  페이지가 누적될수록 Wiki.js 저장이 느려지며 생긴 타임아웃 413건을 90초로 올려 재시도해
+  전부 해소. 로컬 Docker Desktop이 백필 도중 다운되는 사고가 있었으나 볼륨 덕분에 데이터
+  손실 없이 복구, idempotent 설계 덕분에 재실행만으로 이어감. NAS엔 재백필 대신 로컬에서
+  검증된 `wikidb`/`wiki_chunks`/`wiki_page_state`/`wiki_chunk_sync_state`를
+  `pg_dump`/`pg_restore`로 그대로 이관(NAS `scp`가 신형 SFTP 프로토콜에서 실패해 `-O`
+  구버전 프로토콜로 우회 필요). NAS `semantic_search_wiki` 실제 질문으로 재검증 완료.
+- `build_wikijs_pages.py` — `dho/<category>/<item_id>` 페이지에 사람이 직접 추가한 내용이
+  DB 갱신 시 통째로 덮어써지던 문제 수정. `<!-- dho:user-content -->` 마커 이후 내용은
+  갱신할 때 보존하고 마커 이전(자동 생성 영역)만 DB 기준으로 교체하도록 변경(`SINGLE_
+  BY_PATH`에 `content` 필드 추가 + `extract_user_content()`). tarotCard/8611로 실제
+  검증 완료 — 자동 생성 부분은 최신화되고 마커 뒤 사용자 텍스트는 그대로 보존됨.
+  NAS엔 아직 미배포(다음 배포 시 반영).
+
+
 ## 2026-08-10 | 5953f6b
 
 - Dockerfile — `build_search_index.py`가 `COPY` 목록에서 빠져 있던 문제 수정. NAS의
