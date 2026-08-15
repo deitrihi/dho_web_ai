@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [미커밋]
+## 2026-08-16 | a415426
 
 - `chat/app/api/chat/route.ts` — 챗봇 2단계 LLM 구조의 역할을 재배치: 기존엔 gpt-5-mini가
   "계획"만 세우고 deepseek가 도구 실행+답변 작성을 전부 했는데, 이제 gpt-5-mini가 실제
