@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [미커밋]
+## 2026-08-17 | e52d493
 
 - `README.md` — webapp/PostgreSQL/챗봇/Wiki.js/Docker 구성 전체를 반영해 갱신 (구성 표에
   Wiki.js 행 추가, 챗봇 2단계 LLM 구조 설명, 데이터 파이프라인에 Wiki.js 문서 생성+청크
