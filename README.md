@@ -1,19 +1,21 @@
 # 대항해시대 온라인 DB 아카이브 (로컬)
 
 원본 아카이브 사이트(dho-archive.vercel.app)를 크롤링한 데이터를 기반으로 직접 운영하는
-**조회/편집 웹사이트**와 **자연어(AI) 검색 챗봇**. 프로젝트 자체는 크롤러(`scraper.py`)로
-시작했지만, 지금 실제로 쓰는 결과물은 이 두 서비스다. 크롤링/구조화 과정은 아래
-[데이터 파이프라인](#데이터-파이프라인-원본-크롤링--구조화-db) 절 참고.
+**조회/편집 웹사이트**, **자연어(AI) 검색 챗봇**, **자동 생성 위키(Wiki.js)**. 프로젝트
+자체는 크롤러(`scraper.py`)로 시작했지만, 지금 실제로 쓰는 결과물은 이 세 서비스다.
+크롤링/구조화 과정은 아래 [데이터 파이프라인](#데이터-파이프라인-원본-크롤링--구조화-db) 절 참고.
 
 ## 구성
 
 | 서비스 | 위치 | 설명 |
 |---|---|---|
-| PostgreSQL | `postgres` (docker-compose 서비스) | 구조화 데이터 + pgvector 임베딩을 담는 서빙 DB (`pgvector/pgvector:pg16`) |
-| 웹사이트 | `dho_webapp.py` + `templates/` + `static/` | 카테고리 → 항목 목록 → 상세(속성+표) 조회, 항목 추가/수정. Flask, 포트 5050 |
-| AI 챗봇 | `chat/` | 자연어 질문을 SQL로 바꿔서 검색하는 Text-to-SQL 챗봇 + pgvector 기반 시맨틱 검색(정확한 이름을 몰라도 개념/느낌으로 검색). Next.js + Vercel AI SDK, 포트 3000 |
+| PostgreSQL | `postgres` (docker-compose 서비스) | 구조화 데이터 + pgvector 임베딩을 담는 서빙 DB (`pgvector/pgvector:pg16`). DHO 데이터(`dho` DB)와 Wiki.js(`wikidb`)가 같은 인스턴스를 공유하되 DB는 분리 |
+| 웹사이트 | `dho_webapp.py` + `templates/` + `static/` | 카테고리 → 항목 목록 → 상세(속성+표) 조회, 항목 추가/수정, 검색(`pg_trgm`), 내비게이션 순서 설정. Flask, 포트 5050. `/assistant`에서 챗봇을 iframe으로 감싸 보여주고, 항목 상세의 `/link/<name>`은 Wiki.js 문서로 리다이렉트 |
+| AI 챗봇 | `chat/` | 자연어 질문에 답하는 2단계 LLM 챗봇 — 1단계(`gpt-5-mini`)가 도구 호출로 DB/위키 원본 자료를 수집하고, 2단계(`deepseek-v4-flash`)가 도구 없이 그 자료만으로 최종 답변을 종합. Text-to-SQL 조회 + 아이템/위키 pgvector 시맨틱 검색(정확한 이름을 몰라도 개념/느낌으로 검색) 지원. Next.js + Vercel AI SDK, 포트 3000 |
+| Wiki.js | `wikijs` (docker-compose 서비스) + `build_wikijs_pages.py` + `build_wiki_chunks.py` | DHO 데이터를 사람이 읽는 문서로 자동 생성하는 위키(`requarks/wiki:2`). `build_wikijs_pages.py`가 구조화 DB의 항목을 Markdown 페이지로 백필/동기화(GraphQL API), `build_wiki_chunks.py`가 그 페이지를 헤더 기준으로 청킹 후 임베딩해서 챗봇의 `semantic_search_wiki` 도구에 제공. 포트 3001 |
 
-웹사이트/챗봇 둘 다 PostgreSQL 하나(`DATABASE_URL`)만 바라본다. 원본 스크래핑/파싱
+웹사이트/챗봇은 PostgreSQL 하나(`DATABASE_URL`)만 바라보고, Wiki.js는 같은 PostgreSQL
+인스턴스의 별도 DB(`wikidb`, `WIKI_DATABASE_URL`)를 쓴다. 원본 스크래핑/파싱
 파이프라인(아래 [데이터 파이프라인](#데이터-파이프라인-원본-크롤링--구조화-db))은
 `dho_structured.sqlite3`를 그대로 쓰고, `migrate_to_postgres.py`로 PostgreSQL에 옮긴다 —
 자세한 아키텍처 배경은 `plan.md`/`context-notes.md` 참고.
@@ -21,16 +23,21 @@
 ## 빠른 시작 (Docker, 권장)
 
 ```bash
-cp .env.example .env   # POSTGRES_*/OPENAI_* 값 채우기
-docker compose up -d --build          # postgres + 웹사이트 + 챗봇 전부
+cp .env.example .env   # POSTGRES_*/OPENAI_*/DEEPSEEK_*/WIKI_* 값 채우기
+docker compose up -d --build          # postgres + 웹사이트 + 챗봇 + wikijs 전부
 docker compose up -d --build webapp   # 웹사이트만 (postgres가 이미 떠 있어야 함)
 docker compose up -d --build chat     # 챗봇만
+docker compose up -d --build wikijs   # Wiki.js만
 ```
 - 웹사이트: http://localhost:5050
 - 챗봇: http://localhost:3000
+- Wiki.js: http://localhost:3001
 
 최초 기동 시 PostgreSQL은 비어있으므로, 아래 [데이터 파이프라인](#데이터-파이프라인-원본-크롤링--구조화-db)의
-"PostgreSQL로 이관" 단계를 한 번 실행해야 실제 데이터가 채워진다.
+"PostgreSQL로 이관" 단계를 한 번 실행해야 실제 데이터가 채워진다. `postgres/init.sql`은
+컨테이너 최초 기동(데이터 디렉토리가 비어있을 때) 1회만 자동 실행되므로, 기존
+`postgres_data` 볼륨을 재사용하는 배포에서 Wiki.js를 새로 추가한 경우 `wikidb`를 수동으로
+한 번 만들어야 한다 (`CREATE DATABASE wikidb;`).
 
 NAS 등 원격 서버로 배포하려면 `./deploy.sh` 참고 (`cp deploy.config.example deploy.config`로
 접속 정보 먼저 채워야 함 — 로컬에서 먼저 빌드 검증 후 서버로 전송 + 원격 빌드까지 자동화됨).
@@ -110,6 +117,19 @@ npm run dev                           # http://localhost:3000
    전체 33,496건 기준 약 20~40분 소요(OpenAI API 왕복이 병목), 비용은
    `text-embedding-3-small` 기준 1회 전체 재생성에 대략 $0.2~0.3 수준.
 
+6. **Wiki.js 문서 생성 + 청크 임베딩** (`build_wikijs_pages.py` → `build_wiki_chunks.py`,
+   선택) — chat의 위키 시맨틱 검색(`semantic_search_wiki`)을 쓰려면 필요하다. `wikijs`
+   컨테이너가 떠 있어야 한다.
+   ```bash
+   # DATABASE_URL, WIKIJS_URL, WIKI_ADMIN_EMAIL, WIKI_ADMIN_PASS 환경변수가 설정된 상태에서
+   python build_wikijs_pages.py --all          # 카테고리별 Markdown 페이지 생성/갱신
+   # WIKI_DATABASE_URL, OPENAI_API_KEY 환경변수가 설정된 상태에서
+   python build_wiki_chunks.py                 # 페이지를 헤더 기준 청킹 + 임베딩
+   ```
+   `build_wikijs_pages.py`는 항목당 GraphQL 호출이라 전체 33,496건 기준 시간이 꽤 걸린다
+   (`--concurrency`로 동시 처리 수 조절, 기본 8). `build_wiki_chunks.py`는 웹훅을 지원하지
+   않는 Wiki.js 특성상 `wikidb.pages.hash` 변화를 폴링해서 바뀐 페이지만 재청킹한다.
+
 ## 파일 구조
 
 ```
@@ -122,13 +142,15 @@ pg_conn.py                            파생 테이블 스크립트 공용 Postg
 build_backlinks.py, build_acquisition.py,  파생 테이블 생성 (PostgreSQL 대상)
 materialize_*.py, build_search_index.py
 build_embeddings.py                   아이템 임베딩 생성 (pgvector, chat 시맨틱 검색용)
+build_wikijs_pages.py                 구조화 DB → Wiki.js Markdown 페이지 생성/동기화 (GraphQL API)
+build_wiki_chunks.py                  Wiki.js 페이지 → 헤더 기준 청킹 + 임베딩 (chat 위키 시맨틱 검색용)
 
 dho_webapp.py, templates/, static/    웹사이트 (Flask, PostgreSQL 조회/쓰기)
-chat/                                 AI 챗봇 (Next.js, PostgreSQL 조회)
+chat/                                 AI 챗봇 (Next.js, PostgreSQL 조회, 2단계 LLM)
 openwebui_tool_dho_sql.py             (예전 OpenWebUI 연동용, chat/으로 대체됨)
 
-postgres/init.sql                     PostgreSQL 최초 기동 시 pgvector/pg_trgm 확장 생성
-Dockerfile, docker-compose.yml,       배포
+postgres/init.sql                     PostgreSQL 최초 기동 시 pgvector/pg_trgm 확장 + wikidb 생성
+Dockerfile, docker-compose.yml,       배포 (postgres/webapp/chat/wikijs 4개 서비스)
 deploy.sh, deploy.config.example
 
 NEXT_STEPS.md, checklist.md,          작업 기록/설계 문서

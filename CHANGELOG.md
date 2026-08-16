@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [미커밋]
+
+- `README.md` — webapp/PostgreSQL/챗봇/Wiki.js/Docker 구성 전체를 반영해 갱신 (구성 표에
+  Wiki.js 행 추가, 챗봇 2단계 LLM 구조 설명, 데이터 파이프라인에 Wiki.js 문서 생성+청크
+  임베딩 단계 추가, 파일 구조에 build_wikijs_pages.py/build_wiki_chunks.py 추가)
+
 ## 2026-08-16 | a415426
 
 - `chat/app/api/chat/route.ts` — 챗봇 2단계 LLM 구조의 역할을 재배치: 기존엔 gpt-5-mini가
